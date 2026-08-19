@@ -1,0 +1,19 @@
+{
+  "name": "mindsprint",
+  "version": "1.0.0",
+  "description": "ADHD FocusFlow AI - Full MVP Dockerized Learning Platform",
+  "scripts": {
+    "dev": "docker-compose up -d --build",
+    "stop": "docker-compose down",
+    "logs": "docker-compose logs -f",
+    "db:reset": "docker-compose down -v && docker-compose up -d postgres"
+  },
+  "workspaces": [
+    "apps/*",
+    "workers/*"
+  ],
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
+

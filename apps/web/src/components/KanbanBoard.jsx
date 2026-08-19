@@ -1,0 +1,184 @@
+import React, { useState } from 'react';
+import { Clock, Flag, Timer, Trash2, Eye } from 'lucide-react';
+import TaskDetailModal from './TaskDetailModal';
+import api from '../services/api';
+import { getPriorityColor, COLUMN_DOT_COLORS } from '../utils/colors';
+
+export default function KanbanBoard({ tasks, onTaskComplete, onStartSession, onDeleteTask, onRefresh }) {
+  const [selectedTask, setSelectedTask] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const columns = [
+    { id: 'todo', title: 'To Do', color: 'blue' },
+    { id: 'doing', title: 'In Progress', color: 'yellow' },
+    { id: 'done', title: 'Done', color: 'green' }
+  ];
+
+  const handleDragStart = (e, taskId) => {
+    e.dataTransfer.setData('taskId', taskId);
+    setIsDragging(true);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = async (e, newStatus) => {
+    e.preventDefault();
+    const taskId = e.dataTransfer.getData('taskId');
+    setIsDragging(false);
+    
+    try {
+      await api.patch(`/tasks/${taskId}`, { status: newStatus });
+      
+      if (newStatus === 'done') {
+        onTaskComplete(taskId);
+      } else {
+        onRefresh();
+      }
+    } catch (error) {
+      console.error('Failed to update task:', error);
+    }
+  };
+
+  const handleDeleteTask = async (taskId, e) => {
+    e.stopPropagation();
+    await onDeleteTask(taskId);
+  };
+
+  const handleTaskClick = (task) => {
+    if (!isDragging) {
+      setSelectedTask(task);
+    }
+  };
+
+  const handleCompleteTask = async (task) => {
+    try {
+      await api.put(`/tasks/${task.id}`, { status: 'done' });
+      onRefresh();
+    } catch (error) {
+      console.error('Failed to complete task:', error);
+      alert('Failed to complete task');
+    }
+  };
+
+  return (
+    <>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+        {columns.map((column) => {
+          const columnTasks = tasks.filter(task => task.status === column.id);
+          
+          return (
+            <div
+              key={column.id}
+              onDragOver={handleDragOver}
+              onDrop={(e) => handleDrop(e, column.id)}
+              className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl p-4 min-h-[400px]"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <div className={`w-3 h-3 rounded-full ${COLUMN_DOT_COLORS[column.color]}`}></div>
+                  {column.title}
+                </h3>
+                <span className="text-white/50 text-sm">{columnTasks.length}</span>
+              </div>
+
+              <div className="space-y-3">
+                {columnTasks.map((task) => (
+                  <div
+                    key={task.id}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, task.id)}
+                    onClick={() => handleTaskClick(task)}
+                    className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-lg p-4 cursor-pointer hover:bg-white/15 transition-all group"
+                  >
+                    <div className="flex items-start justify-between mb-2">
+                      <h4 className="text-white font-medium flex-1 pr-2">{task.title}</h4>
+                      <span className={`text-xs px-2 py-1 rounded ${getPriorityColor(task.priority)}`}>
+                        P{task.priority}
+                      </span>
+                    </div>
+
+                    {task.description && (
+                      <p className="text-white/60 text-sm mb-3 line-clamp-2">{task.description}</p>
+                    )}
+
+                    <div className="flex items-center justify-between text-sm text-white/50">
+                      <div className="flex items-center gap-3">
+                        <span className="flex items-center gap-1">
+                          <Clock size={14} />
+                          {task.est_minutes}m
+                        </span>
+                        {task.urgency && (
+                          <span className="flex items-center gap-1">
+                            <Flag size={14} />
+                            U{task.urgency}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedTask(task);
+                          }}
+                          className="p-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-200 rounded transition-all"
+                          title="View Details"
+                        >
+                          <Eye size={16} />
+                        </button>
+                        {(task.status === 'todo' || task.status === 'doing') && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onStartSession(task.id, task.title);
+                            }}
+                            className="p-1.5 bg-green-500/20 hover:bg-green-500/30 text-green-200 rounded transition-all"
+                            title="Start Focus Session"
+                          >
+                            <Timer size={16} />
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => handleDeleteTask(task.id, e)}
+                          className="p-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-200 rounded transition-all"
+                          title="Delete Task"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {columnTasks.length === 0 && (
+                  <div className="text-center py-8 text-white/30 text-sm">
+                    No tasks in {column.title.toLowerCase()}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      
+      {/* Task Detail Modal */}
+      {selectedTask && (
+        <TaskDetailModal
+          task={selectedTask}
+          onClose={() => setSelectedTask(null)}
+          onStartSession={(task) => {
+            onStartSession(task.id, task.title);
+            setSelectedTask(null);
+          }}
+          onDeleteTask={async (task) => {
+            await onDeleteTask(task.id);
+            setSelectedTask(null);
+          }}
+          onCompleteTask={handleCompleteTask}
+        />
+      )}
+    </>
+  );
+}
+
