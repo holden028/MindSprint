@@ -7,13 +7,42 @@ import TaskBreakdown from './TaskBreakdown';
 import TaskFeedbackModal from './TaskFeedbackModal';
 import ManualTaskModal from './ManualTaskModal';
 import ManualProjectModal from './ManualProjectModal';
-import { Plus, LayoutGrid, List, Trash2, FolderPlus, Target } from 'lucide-react';
+import {
+  Plus, LayoutGrid, List, Trash2, FolderPlus, Target,
+  AlertTriangle, CalendarClock, Clock, Zap
+} from 'lucide-react';
+import { formatDue, deadlineBadge } from '../utils/deadlines';
+
+function TodayPlanCard({ task, onStart }) {
+  const badge = deadlineBadge(task);
+  return (
+    <div className="flex items-center gap-3 backdrop-blur-sm bg-white/10 border border-white/15 rounded-xl px-4 py-3">
+      <div className="flex-1 min-w-0">
+        <div className="text-white font-medium text-sm truncate">{task.title}</div>
+        <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-white/45">
+          <span>{task.est_minutes || 30}m</span>
+          {task.project_title && <span>· {task.project_title}</span>}
+          {badge && (
+            <span className={`px-1.5 py-0.5 rounded border text-[10px] ${badge.className}`}>{badge.label}</span>
+          )}
+        </div>
+      </div>
+      <button
+        onClick={() => onStart(task.id, task.title)}
+        className="shrink-0 px-3 py-1.5 bg-green-500/20 hover:bg-green-500/30 text-green-200 rounded-lg text-xs font-medium"
+      >
+        Focus
+      </button>
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const [tasks, setTasks] = useState([]);
   const [projects, setProjects] = useState([]);
+  const [today, setToday] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState('kanban'); // 'kanban' or 'list'
+  const [viewMode, setViewMode] = useState('kanban');
   const [showAIModal, setShowAIModal] = useState(false);
   const [showManualTaskModal, setShowManualTaskModal] = useState(false);
   const [showManualProjectModal, setShowManualProjectModal] = useState(false);
@@ -30,6 +59,7 @@ export default function Dashboard() {
       const response = await api.get('/dashboard/today');
       setTasks(response.data.tasks || []);
       setProjects(response.data.projects || []);
+      setToday(response.data.today || null);
     } catch (error) {
       console.error('Failed to load dashboard:', error);
     } finally {
@@ -38,7 +68,7 @@ export default function Dashboard() {
   };
 
   const handleTaskComplete = async (taskId) => {
-    setSelectedTask(tasks.find(t => t.id === taskId));
+    setSelectedTask(tasks.find((t) => t.id === taskId));
     setShowFeedbackModal(true);
   };
 
@@ -54,7 +84,6 @@ export default function Dashboard() {
 
   const handleDeleteTask = async (taskId) => {
     if (!confirm('Are you sure you want to delete this task?')) return;
-    
     try {
       await api.delete(`/tasks/${taskId}`);
       await loadDashboardData();
@@ -64,78 +93,130 @@ export default function Dashboard() {
     }
   };
 
-  if (loading) {
-    return <LoadingSpinner embedded />;
-  }
+  if (loading) return <LoadingSpinner embedded />;
+
+  const freeHours = today ? Math.floor((today.free_minutes || 0) / 60) : 0;
+  const freeMins = today ? (today.free_minutes || 0) % 60 : 0;
 
   return (
     <>
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Header Section */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 pb-24 md:pb-8">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
           <div>
-            <h2 className="text-3xl font-bold text-white mb-2">Your Tasks</h2>
-            <p className="text-white/60">Manage your ADHD-friendly microtasks</p>
+            <h2 className="text-2xl sm:text-3xl font-bold text-white mb-1">Today</h2>
+            <p className="text-white/60 text-sm">
+              {today
+                ? `${freeHours}h ${freeMins}m free · ${today.plan?.length || 0} suggested`
+                : 'Your ADHD-friendly microtasks'}
+            </p>
           </div>
-          
-          <div className="flex items-center gap-3">
-            {/* View Toggle */}
+
+          <div className="flex items-center gap-2 flex-wrap">
             <div className="flex bg-white/10 rounded-lg p-1">
               <button
                 onClick={() => setViewMode('kanban')}
-                className={`p-2 rounded transition-all ${
-                  viewMode === 'kanban' ? 'bg-white/20 text-white' : 'text-white/60'
-                }`}
-                title="Kanban View"
+                className={`p-2 rounded ${viewMode === 'kanban' ? 'bg-white/20 text-white' : 'text-white/60'}`}
               >
-                <LayoutGrid size={20} />
+                <LayoutGrid size={18} />
               </button>
               <button
                 onClick={() => setViewMode('list')}
-                className={`p-2 rounded transition-all ${
-                  viewMode === 'list' ? 'bg-white/20 text-white' : 'text-white/60'
-                }`}
-                title="List View"
+                className={`p-2 rounded ${viewMode === 'list' ? 'bg-white/20 text-white' : 'text-white/60'}`}
               >
-                <List size={20} />
+                <List size={18} />
               </button>
             </div>
-
-            {/* Manual Creation Buttons */}
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowManualProjectModal(true)}
-                className="flex items-center space-x-2 px-4 py-2 backdrop-blur-md bg-white/10 hover:bg-white/15 border border-white/20 text-white rounded-lg transition-all shadow-lg"
-                title="Create Project"
-              >
-                <FolderPlus size={20} />
-                <span>Project</span>
-              </button>
-              
-              <button
-                onClick={() => setShowManualTaskModal(true)}
-                className="flex items-center space-x-2 px-4 py-2 backdrop-blur-md bg-white/10 hover:bg-white/15 border border-white/20 text-white rounded-lg transition-all shadow-lg"
-                title="Create Task"
-              >
-                <Target size={20} />
-                <span>Task</span>
-              </button>
-            </div>
-
+            <button
+              onClick={() => setShowManualProjectModal(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-white/10 border border-white/20 text-white rounded-lg text-sm"
+            >
+              <FolderPlus size={16} />
+              <span className="hidden sm:inline">Project</span>
+            </button>
+            <button
+              onClick={() => setShowManualTaskModal(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-white/10 border border-white/20 text-white rounded-lg text-sm"
+            >
+              <Target size={16} />
+              <span className="hidden sm:inline">Task</span>
+            </button>
             <button
               onClick={() => setShowAIModal(true)}
-              className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-blue-500 text-white rounded-lg hover:from-purple-600 hover:to-blue-600 transition-all"
+              className="flex items-center gap-1.5 px-3 py-2 bg-gradient-to-r from-purple-500 to-blue-500 text-white rounded-lg text-sm"
             >
-              <Plus size={20} />
-              <span>Add Tasks (AI)</span>
+              <Plus size={16} />
+              <span>AI</span>
             </button>
           </div>
         </div>
 
-        {/* Tasks Display */}
+        {/* Deadline signals */}
+        {today && (today.overdue?.length > 0 || today.due_today?.length > 0 || today.start_today?.length > 0) && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+            {today.overdue?.length > 0 && (
+              <div className="bg-red-500/15 border border-red-400/30 rounded-xl p-3">
+                <div className="flex items-center gap-2 text-red-200 text-sm font-semibold mb-2">
+                  <AlertTriangle size={16} /> Overdue ({today.overdue.length})
+                </div>
+                <ul className="space-y-1">
+                  {today.overdue.slice(0, 3).map((t) => (
+                    <li key={t.id} className="text-xs text-red-100/80 truncate">{t.title}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {today.due_today?.length > 0 && (
+              <div className="bg-orange-500/15 border border-orange-400/30 rounded-xl p-3">
+                <div className="flex items-center gap-2 text-orange-200 text-sm font-semibold mb-2">
+                  <CalendarClock size={16} /> Due today ({today.due_today.length})
+                </div>
+                <ul className="space-y-1">
+                  {today.due_today.slice(0, 3).map((t) => (
+                    <li key={t.id} className="text-xs text-orange-100/80 truncate">
+                      {t.title} · {formatDue(t.due_at)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {today.start_today?.length > 0 && (
+              <div className="bg-amber-500/10 border border-amber-400/25 rounded-xl p-3">
+                <div className="flex items-center gap-2 text-amber-200 text-sm font-semibold mb-2">
+                  <Clock size={16} /> Start by today ({today.start_today.length})
+                </div>
+                <ul className="space-y-1">
+                  {today.start_today.slice(0, 3).map((t) => (
+                    <li key={t.id} className="text-xs text-amber-100/70 truncate">{t.title}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Suggested plan from free time */}
+        {today?.plan?.length > 0 && (
+          <div className="mb-8">
+            <div className="flex items-center gap-2 mb-3">
+              <Zap size={18} className="text-purple-300" />
+              <h3 className="text-lg font-semibold text-white">Suggested for your free time</h3>
+              <span className="text-xs text-white/40">
+                ~{today.plan_minutes}m of {today.free_minutes}m free
+              </span>
+            </div>
+            <div className="space-y-2">
+              {today.plan.map((t) => (
+                <TodayPlanCard key={t.id} task={t} onStart={handleStartSession} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        <h3 className="text-lg font-semibold text-white mb-4">All open tasks</h3>
+
         {viewMode === 'kanban' ? (
-          <KanbanBoard 
-            tasks={tasks} 
+          <KanbanBoard
+            tasks={tasks}
             onTaskComplete={handleTaskComplete}
             onStartSession={handleStartSession}
             onDeleteTask={handleDeleteTask}
@@ -143,63 +224,62 @@ export default function Dashboard() {
           />
         ) : (
           <div className="space-y-3">
-            {tasks.map((task) => (
-              <div
-                key={task.id}
-                className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-lg p-4 hover:bg-white/15 transition-all"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <h3 className="text-white font-medium mb-1">{task.title}</h3>
-                    {task.description && (
-                      <p className="text-white/60 text-sm mb-2">{task.description}</p>
-                    )}
-                    <div className="flex items-center gap-3 text-sm text-white/50">
-                      <span>{task.est_minutes} min</span>
-                      <span>Priority: {task.priority}</span>
-                      <span className="capitalize">{task.status}</span>
+            {tasks.map((task) => {
+              const badge = deadlineBadge(task);
+              return (
+                <div
+                  key={task.id}
+                  className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-lg p-4 hover:bg-white/15 transition-all"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-white font-medium mb-1">{task.title}</h3>
+                      <div className="flex flex-wrap items-center gap-2 text-sm text-white/50">
+                        <span>{task.est_minutes} min</span>
+                        <span>P{task.priority}</span>
+                        {badge && (
+                          <span className={`px-1.5 py-0.5 rounded border text-[10px] ${badge.className}`}>
+                            {badge.label}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {(task.status === 'todo' || task.status === 'doing') && (
+                    <div className="flex items-center gap-2 shrink-0">
                       <button
                         onClick={() => handleStartSession(task.id, task.title)}
-                        className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-200 rounded-lg transition-all"
-                        title="Start Focus Session"
+                        className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-200 rounded-lg"
                       >
                         <Plus size={18} />
                       </button>
-                    )}
-                    <button
-                      onClick={() => handleDeleteTask(task.id)}
-                      className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-200 rounded-lg transition-all"
-                      title="Delete Task"
-                    >
-                      <Trash2 size={18} />
-                    </button>
+                      <button
+                        onClick={() => handleDeleteTask(task.id)}
+                        className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-200 rounded-lg"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
-        {/* Projects Overview */}
         {projects.length > 0 && (
           <div className="mt-12">
-            <h3 className="text-2xl font-bold text-white mb-6">Your Projects</h3>
+            <h3 className="text-xl font-bold text-white mb-4">Projects</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {projects.map((project) => (
                 <div
                   key={project.id}
                   onClick={() => navigate(`/projects/${project.id}`)}
-                  className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-lg p-6 hover:bg-white/15 transition-all cursor-pointer"
+                  className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-lg p-5 hover:bg-white/15 cursor-pointer"
                 >
-                  <h4 className="text-white font-semibold mb-2">{project.title}</h4>
-                  <p className="text-white/60 text-sm mb-4">{project.description}</p>
+                  <h4 className="text-white font-semibold mb-1">{project.title}</h4>
+                  <p className="text-white/60 text-sm mb-3 line-clamp-2">{project.description}</p>
                   <div className="flex justify-between text-sm text-white/50">
                     <span>{project.task_count} tasks</span>
-                    <span>{project.completed_tasks} completed</span>
+                    <span>{project.completed_tasks} done</span>
                   </div>
                 </div>
               ))}
@@ -208,48 +288,22 @@ export default function Dashboard() {
         )}
       </main>
 
-      {/* Modals */}
       {showAIModal && (
-        <TaskBreakdown
-          onComplete={() => {
-            setShowAIModal(false);
-            loadDashboardData();
-          }}
-          onClose={() => setShowAIModal(false)}
-        />
+        <TaskBreakdown onComplete={() => { setShowAIModal(false); loadDashboardData(); }} onClose={() => setShowAIModal(false)} />
       )}
-
       {showManualTaskModal && (
-        <ManualTaskModal
-          onComplete={() => {
-            setShowManualTaskModal(false);
-            loadDashboardData();
-          }}
-          onClose={() => setShowManualTaskModal(false)}
-        />
+        <ManualTaskModal onComplete={() => { setShowManualTaskModal(false); loadDashboardData(); }} onClose={() => setShowManualTaskModal(false)} />
       )}
-
       {showManualProjectModal && (
-        <ManualProjectModal
-          onSuccess={() => {
-            setShowManualProjectModal(false);
-            loadDashboardData();
-          }}
-          onClose={() => setShowManualProjectModal(false)}
-        />
+        <ManualProjectModal onSuccess={() => { setShowManualProjectModal(false); loadDashboardData(); }} onClose={() => setShowManualProjectModal(false)} />
       )}
-
       {showFeedbackModal && selectedTask && (
         <TaskFeedbackModal
           task={selectedTask}
-          onClose={() => {
-            setShowFeedbackModal(false);
-            setSelectedTask(null);
-          }}
+          onClose={() => { setShowFeedbackModal(false); setSelectedTask(null); }}
           onSubmit={handleFeedbackSubmit}
         />
       )}
     </>
   );
 }
-

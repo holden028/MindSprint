@@ -3,8 +3,12 @@ const { Pool } = require('pg');
 const SLOW_MS = 100;
 
 function dbSslConfig() {
+  // Explicit override for local Docker / non-TLS Postgres
   if (process.env.DATABASE_SSL === 'false') return false;
-  if (process.env.NODE_ENV === 'production') {
+  if (process.env.DATABASE_SSL === 'true') return { rejectUnauthorized: false };
+  const url = process.env.DATABASE_URL || '';
+  // Railway/Neon/etc typically need TLS; docker hostnames do not
+  if (/railway|neon|render|supabase|sslmode=require/i.test(url)) {
     return { rejectUnauthorized: false };
   }
   return false;

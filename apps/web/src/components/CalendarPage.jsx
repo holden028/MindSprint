@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ChevronLeft, ChevronRight, Clock, Target, Lock, CalendarDays } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Target, Lock, CalendarDays, Plus, X } from 'lucide-react';
 import api from '../services/api';
 
 const HOURS = Array.from({ length: 16 }, (_, i) => i + 7); // 7am - 10pm
@@ -57,6 +57,11 @@ export default function CalendarPage() {
   const [blocks, setBlocks] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [slotModal, setSlotModal] = useState(null); // { date, hour }
+  const [slotMode, setSlotMode] = useState('task'); // task | block
+  const [slotTitle, setSlotTitle] = useState('');
+  const [slotMinutes, setSlotMinutes] = useState(60);
+  const [slotSaving, setSlotSaving] = useState(false);
   const scrollRef = useRef(null);
 
   const dates = view === 'day'
@@ -140,6 +145,48 @@ export default function CalendarPage() {
       const due = new Date(t.due_at);
       return isSameDay(due, date);
     });
+  };
+
+  const openSlot = (date, e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const hour = Math.min(21, Math.max(7, Math.floor(y / HOUR_HEIGHT) + 7));
+    setSlotModal({ date: new Date(date), hour });
+    setSlotMode('task');
+    setSlotTitle('');
+    setSlotMinutes(60);
+  };
+
+  const saveSlot = async () => {
+    if (!slotModal || !slotTitle.trim()) return;
+    setSlotSaving(true);
+    try {
+      const d = new Date(slotModal.date);
+      d.setHours(slotModal.hour, 0, 0, 0);
+      if (slotMode === 'task') {
+        await api.post('/tasks', {
+          title: slotTitle.trim(),
+          est_minutes: slotMinutes,
+          due_at: d.toISOString(),
+          priority: 3,
+          urgency: 4
+        });
+      } else {
+        const end = new Date(d.getTime() + slotMinutes * 60000);
+        await api.post('/schedule/blocks', {
+          title: slotTitle.trim(),
+          starts_at: d.toISOString(),
+          ends_at: end.toISOString()
+        });
+      }
+      setSlotModal(null);
+      await loadData();
+    } catch (err) {
+      console.error('Failed to save slot:', err);
+      alert(err.response?.data?.error || 'Failed to save');
+    } finally {
+      setSlotSaving(false);
+    }
   };
 
   const headerTitle = view === 'day'
@@ -269,11 +316,15 @@ export default function CalendarPage() {
                 const isToday = isSameDay(date, today);
 
                 return (
-                  <div key={colIdx} className={`relative border-l border-white/10 ${isToday ? 'bg-purple-500/[0.03]' : ''}`}
-                    style={{ height: HOURS.length * HOUR_HEIGHT }}>
+                  <div
+                    key={colIdx}
+                    onClick={(e) => openSlot(date, e)}
+                    className={`relative border-l border-white/10 cursor-pointer hover:bg-white/[0.02] ${isToday ? 'bg-purple-500/[0.03]' : ''}`}
+                    style={{ height: HOURS.length * HOUR_HEIGHT }}
+                  >
                     {/* Hour lines */}
                     {HOURS.map(h => (
-                      <div key={h} className="absolute w-full border-t border-white/5" style={{ top: (h - 7) * HOUR_HEIGHT }} />
+                      <div key={h} className="absolute w-full border-t border-white/5 pointer-events-none" style={{ top: (h - 7) * HOUR_HEIGHT }} />
                     ))}
 
                     {/* Current time indicator */}
@@ -299,7 +350,7 @@ export default function CalendarPage() {
                       const top = positionForTime(start);
                       const height = heightForDuration(durationMin);
                       return (
-                        <div key={`b-${i}`} className="absolute left-1 right-1 z-10 rounded-lg bg-orange-500/15 border border-orange-400/20 px-2 py-1 overflow-hidden"
+                        <div key={`b-${i}`} onClick={(e) => e.stopPropagation()} className="absolute left-1 right-1 z-10 rounded-lg bg-orange-500/15 border border-orange-400/20 px-2 py-1 overflow-hidden"
                           style={{ top, height: Math.max(height, 20) }}>
                           <div className="flex items-center gap-1">
                             <Lock size={10} className="text-orange-300/60 shrink-0" />
@@ -332,7 +383,7 @@ export default function CalendarPage() {
                       const color = priorityColors[task.priority] || priorityColors[3];
 
                       return (
-                        <div key={`t-${i}`} className={`absolute left-1 right-1 z-10 rounded-lg border px-2 py-1 overflow-hidden cursor-pointer hover:brightness-125 transition-all ${color}`}
+                        <div key={`t-${i}`} onClick={(e) => e.stopPropagation()} className={`absolute left-1 right-1 z-10 rounded-lg border px-2 py-1 overflow-hidden cursor-pointer hover:brightness-125 transition-all ${color}`}
                           style={{ top, height: Math.max(height, 22) }}>
                           <div className="flex items-center gap-1">
                             <Target size={10} className="text-white/60 shrink-0" />
@@ -356,7 +407,7 @@ export default function CalendarPage() {
       </div>
 
       {/* Legend */}
-      <div className="flex items-center gap-6 mt-3 px-2">
+      <div className="flex items-center gap-4 mt-3 px-2 flex-wrap">
         <div className="flex items-center gap-1.5">
           <div className="w-3 h-3 rounded bg-orange-500/20 border border-orange-400/30" />
           <span className="text-[11px] text-white/40">Blocked Time</span>
@@ -369,7 +420,63 @@ export default function CalendarPage() {
           <div className="w-2.5 h-2.5 bg-red-500 rounded-full" />
           <span className="text-[11px] text-white/40">Now</span>
         </div>
+        <span className="text-[11px] text-white/30">Tap empty time to add</span>
       </div>
+
+      {slotModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setSlotModal(null)}>
+          <div
+            className="w-full max-w-md backdrop-blur-xl bg-gray-900/95 border border-white/20 rounded-2xl p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white font-semibold flex items-center gap-2">
+                <Plus size={18} className="text-purple-300" />
+                {formatHour(slotModal.hour)} · {slotModal.date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+              </h3>
+              <button onClick={() => setSlotModal(null)} className="p-1 text-white/50 hover:text-white"><X size={18} /></button>
+            </div>
+            <div className="flex gap-2 mb-3">
+              <button
+                onClick={() => setSlotMode('task')}
+                className={`flex-1 py-2 rounded-lg text-sm border ${slotMode === 'task' ? 'bg-blue-500/20 border-blue-400/40 text-blue-200' : 'bg-white/5 border-white/10 text-white/50'}`}
+              >
+                Add task
+              </button>
+              <button
+                onClick={() => setSlotMode('block')}
+                className={`flex-1 py-2 rounded-lg text-sm border ${slotMode === 'block' ? 'bg-orange-500/20 border-orange-400/40 text-orange-200' : 'bg-white/5 border-white/10 text-white/50'}`}
+              >
+                Block time
+              </button>
+            </div>
+            <input
+              type="text"
+              value={slotTitle}
+              onChange={(e) => setSlotTitle(e.target.value)}
+              placeholder={slotMode === 'task' ? 'Task title…' : 'e.g. On-site / Meeting…'}
+              className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+              autoFocus
+            />
+            <label className="text-xs text-white/50 mb-1 block">Duration (minutes)</label>
+            <input
+              type="number"
+              min={15}
+              max={480}
+              value={slotMinutes}
+              onChange={(e) => setSlotMinutes(parseInt(e.target.value, 10) || 60)}
+              className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-white text-sm mb-4"
+            />
+            <button
+              onClick={saveSlot}
+              disabled={slotSaving || !slotTitle.trim()}
+              className="w-full py-3 bg-gradient-to-r from-purple-500 to-blue-500 text-white rounded-xl font-medium disabled:opacity-50"
+            >
+              {slotSaving ? 'Saving…' : slotMode === 'task' ? 'Create task' : 'Add block'}
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

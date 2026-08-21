@@ -37,9 +37,15 @@ function redisConnection() {
 // Database connection
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://app:password@postgres:5432/focusflow',
-  ssl: process.env.NODE_ENV === 'production' && process.env.DATABASE_SSL !== 'false'
-    ? { rejectUnauthorized: false }
-    : false
+  ssl: (() => {
+    if (process.env.DATABASE_SSL === 'false') return false;
+    if (process.env.DATABASE_SSL === 'true') return { rejectUnauthorized: false };
+    const url = process.env.DATABASE_URL || '';
+    if (/railway|neon|render|supabase|sslmode=require/i.test(url)) {
+      return { rejectUnauthorized: false };
+    }
+    return false;
+  })()
 });
 
 console.log('🤖 AI Worker starting...');

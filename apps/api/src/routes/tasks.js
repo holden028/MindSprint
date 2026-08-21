@@ -200,7 +200,29 @@ async function updateTask(req, res) {
     const owned = await assertTaskOwner(res, id, user_id);
     if (!owned) return;
 
-    const allowedFields = ['title', 'description', 'status', 'priority', 'urgency', 'est_minutes', 'actual_minutes', 'actual_time_accuracy', 'due_at'];
+    const allowedFields = [
+      'title', 'description', 'status', 'priority', 'urgency', 'est_minutes',
+      'actual_minutes', 'actual_time_accuracy', 'due_at', 'is_recurring', 'recurrence_rule'
+    ];
+
+    // Compute next_occurrence when recurrence changes
+    if (updates.is_recurring && updates.recurrence_rule) {
+      updates.next_occurrence = computeNextOccurrence(
+        typeof updates.recurrence_rule === 'string'
+          ? JSON.parse(updates.recurrence_rule)
+          : updates.recurrence_rule
+      );
+      allowedFields.push('next_occurrence');
+    } else if (updates.is_recurring === false) {
+      updates.next_occurrence = null;
+      updates.recurrence_rule = null;
+      allowedFields.push('next_occurrence');
+    }
+
+    if (updates.recurrence_rule && typeof updates.recurrence_rule === 'object') {
+      updates.recurrence_rule = JSON.stringify(updates.recurrence_rule);
+    }
+
     const { updateFields, values, nextParam } = patchRow(updates, allowedFields);
 
     if (updateFields.length === 0) {

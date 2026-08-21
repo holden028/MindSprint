@@ -27,6 +27,7 @@ services:
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://app:password@postgres:5432/focusflow
+      - DATABASE_SSL=false
       - REDIS_URL=redis://redis:6379
       - JWT_SECRET=${JWT_SECRET}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -48,6 +49,7 @@ services:
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://app:password@postgres:5432/focusflow
+      - DATABASE_SSL=false
       - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}

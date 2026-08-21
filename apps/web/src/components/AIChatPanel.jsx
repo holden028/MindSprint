@@ -110,7 +110,7 @@ export default function AIChatPanel() {
     return (
       <button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 z-50 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white p-4 rounded-2xl shadow-2xl transition-all hover:scale-105 group"
+        className="fixed bottom-20 md:bottom-6 right-4 md:right-6 z-50 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white p-4 rounded-2xl shadow-2xl transition-all hover:scale-105 group"
         title="AI Assistant"
       >
         <Sparkles size={24} />
@@ -120,7 +120,7 @@ export default function AIChatPanel() {
   }
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 w-[400px] max-w-[calc(100vw-2rem)] h-[600px] max-h-[calc(100vh-6rem)] flex flex-col backdrop-blur-xl bg-gray-900/95 border border-white/20 rounded-2xl shadow-2xl overflow-hidden">
+    <div className="fixed bottom-20 md:bottom-6 right-4 md:right-6 z-50 w-[min(400px,calc(100vw-2rem))] h-[min(600px,calc(100vh-8rem))] flex flex-col backdrop-blur-xl bg-gray-900/95 border border-white/20 rounded-2xl shadow-2xl overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-gradient-to-r from-purple-600/20 to-blue-600/20">
         <div className="flex items-center gap-2">
