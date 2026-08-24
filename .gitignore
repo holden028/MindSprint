@@ -1,6 +1,11 @@
 node_modules/
 .env
 deploy/oracle/.env
+deploy/oracle/terraform/terraform.tfvars
+deploy/oracle/terraform/.terraform/
+deploy/oracle/terraform/*.tfstate
+deploy/oracle/terraform/*.tfstate.*
+deploy/oracle/terraform/.terraform.lock.hcl
 dist/
 build/
 *.log

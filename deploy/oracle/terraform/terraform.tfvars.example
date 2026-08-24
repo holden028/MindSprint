@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars (never commit terraform.tfvars)
+
+compartment_id = "ocid1.tenancy.oc1..aaaa..."   # or a compartment OCID
+region         = "uk-london-1"                  # pick your home region
+
+# Optional overrides:
+# ocpus                 = 2
+# memory_in_gbs         = 12
+# availability_domain_index = 0
+# ssh_public_key_path   = "~/.ssh/id_ed25519.pub"
+# ssh_cidr              = "1.2.3.4/32"          # lock SSH to your IP
