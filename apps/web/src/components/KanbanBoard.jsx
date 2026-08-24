@@ -25,6 +25,8 @@ export default function KanbanBoard({ tasks, onTaskComplete, onStartSession, onD
     e.preventDefault();
     const taskId = e.dataTransfer.getData('taskId');
     setIsDragging(false);
+    const dragged = tasks.find((t) => t.id === taskId);
+    if (dragged && dragged.can_edit === false) return;
     try {
       await api.patch(`/tasks/${taskId}`, { status: newStatus });
       if (newStatus === 'done') onTaskComplete(taskId);
@@ -83,7 +85,7 @@ export default function KanbanBoard({ tasks, onTaskComplete, onStartSession, onD
                   return (
                     <div
                       key={task.id}
-                      draggable
+                      draggable={task.can_edit !== false}
                       onDragStart={(e) => handleDragStart(e, task.id)}
                       onClick={() => { if (!isDragging) setSelectedTask(task); }}
                       className={`backdrop-blur-sm bg-white/10 border rounded-lg p-4 cursor-pointer hover:bg-white/15 transition-all group ${borderFor(task)}`}
@@ -118,6 +120,14 @@ export default function KanbanBoard({ tasks, onTaskComplete, onStartSession, onD
                             </span>
                           )}
                           {task.is_recurring && <Repeat size={12} className="text-purple-300" />}
+                          {task.is_shared && (
+                            <span className="text-[10px] text-cyan-300">
+                              {task.my_role === 'view' ? 'View only' : 'Shared'}
+                            </span>
+                          )}
+                          {task.assignee_email && (
+                            <span className="text-[10px] text-amber-200">→ {task.assignee_email}</span>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -127,7 +137,7 @@ export default function KanbanBoard({ tasks, onTaskComplete, onStartSession, onD
                           >
                             <Eye size={16} />
                           </button>
-                          {(task.status === 'todo' || task.status === 'doing') && (
+                          {(task.status === 'todo' || task.status === 'doing') && task.can_edit !== false && (
                             <button
                               onClick={(e) => { e.stopPropagation(); onStartSession(task.id, task.title); }}
                               className="p-1.5 bg-green-500/20 hover:bg-green-500/30 text-green-200 rounded"
@@ -135,12 +145,14 @@ export default function KanbanBoard({ tasks, onTaskComplete, onStartSession, onD
                               <Timer size={16} />
                             </button>
                           )}
+                          {(task.can_delete ?? !task.is_shared) && (
                           <button
                             onClick={(e) => handleDeleteTask(task.id, e)}
                             className="p-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-200 rounded"
                           >
                             <Trash2 size={16} />
                           </button>
+                          )}
                         </div>
                       </div>
                     </div>

@@ -1,7 +1,7 @@
 const express = require('express');
 const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
-const { assertTaskOwner } = require('../utils/dbHelpers');
+const { assertTaskAccess } = require('../utils/access');
 const { parseLimit, parseOffset } = require('../utils/pagination');
 
 const router = express.Router();
@@ -13,8 +13,8 @@ router.post('/start', authenticateToken, async (req, res) => {
     const { task_id, mode = 'pomodoro', duration_minutes = 25, environment = {} } = req.body;
 
     if (task_id) {
-      const owned = await assertTaskOwner(res, task_id, user_id);
-      if (!owned) return;
+      const access = await assertTaskAccess(res, task_id, user_id, { requireEdit: true });
+      if (!access) return;
     }
 
     const result = await query(`
@@ -99,8 +99,8 @@ router.delete('/complete-task', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Task ID is required' });
     }
 
-    const owned = await assertTaskOwner(res, task_id, user_id);
-    if (!owned) return;
+    const access = await assertTaskAccess(res, task_id, user_id, { requireEdit: true });
+    if (!access) return;
 
     await query(`
       UPDATE tasks

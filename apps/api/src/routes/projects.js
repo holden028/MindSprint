@@ -3,6 +3,7 @@ const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { patchRow } = require('../utils/dbHelpers');
 const { parseLimit, parseOffset } = require('../utils/pagination');
+const { projectVisibleSql, getProjectAccess } = require('../utils/access');
 
 const router = express.Router();
 
@@ -16,12 +17,15 @@ router.get('/', authenticateToken, async (req, res) => {
     const result = await query(`
       SELECT
         p.*,
+        owner.email as owner_email,
+        (p.user_id != $1) as is_shared,
         COUNT(t.id) as task_count,
         COUNT(CASE WHEN t.status = 'done' THEN 1 END) as completed_tasks
       FROM projects p
+      JOIN users owner ON p.user_id = owner.id
       LEFT JOIN tasks t ON p.id = t.project_id
-      WHERE p.user_id = $1
-      GROUP BY p.id
+      WHERE ${projectVisibleSql('$1')}
+      GROUP BY p.id, owner.email
       ORDER BY p.created_at DESC
       LIMIT $2 OFFSET $3
     `, [user_id, limit, offset]);
@@ -63,13 +67,12 @@ router.patch('/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
 
-    const projectCheck = await query(
-      'SELECT id FROM projects WHERE id = $1 AND user_id = $2',
-      [id, user_id]
-    );
-
-    if (projectCheck.rows.length === 0) {
+    const access = await getProjectAccess(id, user_id);
+    if (!access) {
       return res.status(404).json({ error: 'Project not found' });
+    }
+    if (!access.is_owner) {
+      return res.status(403).json({ error: 'Only the owner can edit this project' });
     }
 
     const allowedFields = ['title', 'description', 'tags', 'ai_analysis'];
@@ -102,13 +105,12 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     const { user_id } = req.user;
     const { id } = req.params;
 
-    const projectCheck = await query(
-      'SELECT id FROM projects WHERE id = $1 AND user_id = $2',
-      [id, user_id]
-    );
-
-    if (projectCheck.rows.length === 0) {
+    const access = await getProjectAccess(id, user_id);
+    if (!access) {
       return res.status(404).json({ error: 'Project not found' });
+    }
+    if (!access.is_owner) {
+      return res.status(403).json({ error: 'Only the owner can delete this project' });
     }
 
     await query('DELETE FROM projects WHERE id = $1', [id]);

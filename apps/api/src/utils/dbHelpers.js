@@ -1,18 +1,9 @@
 const { query } = require('../config/database');
+const { assertTaskAccess } = require('./access');
 
+/** Owner-only (delete, share). */
 async function assertTaskOwner(res, taskId, userId) {
-  const result = await query(`
-    SELECT t.id FROM tasks t
-    JOIN projects p ON t.project_id = p.id
-    WHERE t.id = $1 AND p.user_id = $2
-  `, [taskId, userId]);
-
-  if (result.rows.length === 0) {
-    res.status(404).json({ error: 'Task not found' });
-    return null;
-  }
-
-  return result.rows[0];
+  return assertTaskAccess(res, taskId, userId, { requireOwner: true });
 }
 
 function patchRow(updates, allowedFields) {
@@ -24,7 +15,7 @@ function patchRow(updates, allowedFields) {
     if (allowedFields.includes(key)) {
       updateFields.push(`${key} = $${nextParam}`);
       values.push(value);
-      nextParam++;
+      nextParam += 1;
     }
   }
 
@@ -33,5 +24,6 @@ function patchRow(updates, allowedFields) {
 
 module.exports = {
   assertTaskOwner,
+  assertTaskAccess,
   patchRow
 };

@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { signToken } = require('../utils/jwt');
+const { bindSharesForUser } = require('../utils/access');
 
 const router = express.Router();
 
@@ -42,6 +43,7 @@ router.post('/register', async (req, res) => {
     );
 
     const user = result.rows[0];
+    await bindSharesForUser(user.id, user.email);
     const token = signToken({
       user_id: user.id,
       email: user.email,
@@ -83,6 +85,8 @@ router.post('/login', async (req, res) => {
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+
+    await bindSharesForUser(user.id, user.email);
 
     const token = signToken({
       user_id: user.id,

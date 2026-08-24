@@ -8,7 +8,8 @@ async function createAutoReminders(userId, taskId, dueDate, estMinutes = 30) {
   await query(
     `DELETE FROM reminders
      WHERE task_id = $1 AND user_id = $2
-       AND kind IN ('morning', 'start_by', 'due_soon', 'deadline')`,
+       AND kind IN ('morning', 'start_by', 'due_soon', 'deadline')
+       AND sent = false`,
     [taskId, userId]
   );
 
@@ -48,17 +49,56 @@ async function createAutoReminders(userId, taskId, dueDate, estMinutes = 30) {
   return ladder.length;
 }
 
+async function clearAutoReminders(taskId, userId = null) {
+  if (userId) {
+    await query(
+      `DELETE FROM reminders
+       WHERE task_id = $1 AND user_id = $2
+         AND kind IN ('morning', 'start_by', 'due_soon', 'deadline')
+         AND sent = false`,
+      [taskId, userId]
+    );
+    return;
+  }
+  await query(
+    `DELETE FROM reminders
+     WHERE task_id = $1
+       AND kind IN ('morning', 'start_by', 'due_soon', 'deadline')
+       AND sent = false`,
+    [taskId]
+  );
+}
+
+/** Owner keeps the ladder unless the task is assigned; then only the assignee does. */
+async function syncTaskReminders(taskId) {
+  const result = await query(
+    `SELECT t.id, t.due_at, t.est_minutes, t.assignee_user_id, p.user_id as owner_id
+     FROM tasks t
+     JOIN projects p ON t.project_id = p.id
+     WHERE t.id = $1`,
+    [taskId]
+  );
+  const row = result.rows[0];
+  if (!row) return 0;
+
+  await clearAutoReminders(taskId);
+
+  if (!row.due_at) return 0;
+  const recipient = row.assignee_user_id || row.owner_id;
+  return createAutoReminders(recipient, taskId, new Date(row.due_at), row.est_minutes || 30);
+}
+
 /** Rebuild typed ladders for every open task that has due_at (optionally one user). */
 async function refreshAllAutoReminders(userId = null) {
   const params = [];
   let where = `WHERE t.status != 'done' AND t.due_at IS NOT NULL`;
   if (userId) {
     params.push(userId);
-    where += ` AND p.user_id = $1`;
+    where += ` AND (p.user_id = $1 OR t.assignee_user_id = $1)`;
   }
 
   const result = await query(
-    `SELECT t.id, t.due_at, t.est_minutes, p.user_id
+    `SELECT t.id
      FROM tasks t
      JOIN projects p ON t.project_id = p.id
      ${where}`,
@@ -67,10 +107,15 @@ async function refreshAllAutoReminders(userId = null) {
 
   let refreshed = 0;
   for (const row of result.rows) {
-    await createAutoReminders(row.user_id, row.id, new Date(row.due_at), row.est_minutes || 30);
+    await syncTaskReminders(row.id);
     refreshed += 1;
   }
   return refreshed;
 }
 
-module.exports = { createAutoReminders, refreshAllAutoReminders };
+module.exports = {
+  createAutoReminders,
+  refreshAllAutoReminders,
+  syncTaskReminders,
+  clearAutoReminders
+};

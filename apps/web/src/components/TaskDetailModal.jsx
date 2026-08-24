@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
   X, Clock, AlertCircle, Target, FileText, Brain, CheckCircle,
-  CalendarClock, Bell, Repeat
+  CalendarClock, Bell, Repeat, UserCheck
 } from 'lucide-react';
 import Modal from './Modal';
 import ReminderPicker from './ReminderPicker';
+import ShareInvite from './ShareInvite';
 import api from '../services/api';
 import { getUrgencyColor } from '../utils/colors';
 import { formatDue, toDatetimeLocal } from '../utils/deadlines';
@@ -21,6 +22,8 @@ export default function TaskDetailModal({ task: initialTask, onClose, onStartSes
   const [recDays, setRecDays] = useState(initialTask?.recurrence_rule?.days || []);
   const [recInterval, setRecInterval] = useState(initialTask?.recurrence_rule?.interval || 1);
   const [msg, setMsg] = useState('');
+  const [assigneeEmail, setAssigneeEmail] = useState(initialTask?.assignee_email || '');
+  const [assigning, setAssigning] = useState(false);
 
   useEffect(() => {
     setTask(initialTask);
@@ -29,9 +32,14 @@ export default function TaskDetailModal({ task: initialTask, onClose, onStartSes
     setRecFreq(initialTask?.recurrence_rule?.freq || 'daily');
     setRecDays(initialTask?.recurrence_rule?.days || []);
     setRecInterval(initialTask?.recurrence_rule?.interval || 1);
+    setAssigneeEmail(initialTask?.assignee_email || '');
   }, [initialTask]);
 
   if (!task) return null;
+
+  const canEdit = task.can_edit ?? true;
+  const canDelete = task.can_delete ?? !task.is_shared;
+  const canShare = task.is_owner ?? !task.is_shared;
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -92,6 +100,16 @@ export default function TaskDetailModal({ task: initialTask, onClose, onStartSes
             <span>·</span>
             <span>Created {formatDate(task.created_at)}</span>
             {msg && <span className="text-green-300 text-xs ml-2">{msg}</span>}
+            {task.is_shared && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-cyan-400/30 text-cyan-200">
+                Shared by {task.owner_email || 'someone'}{task.my_role === 'view' ? ' · view only' : ''}
+              </span>
+            )}
+            {task.assignee_email && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-amber-400/30 text-amber-200">
+                Assigned to {task.assignee_email}
+              </span>
+            )}
           </div>
         </div>
         <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-all ml-4 shrink-0">
@@ -100,6 +118,78 @@ export default function TaskDetailModal({ task: initialTask, onClose, onStartSes
       </div>
 
       {/* Due date */}
+      <ShareInvite taskId={task.id} canShare={canShare} />
+
+      {canShare && (
+        <div className="mb-6 backdrop-blur-sm bg-white/5 border border-white/10 rounded-xl p-4">
+          <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+            <UserCheck className="text-amber-400" size={16} />
+            Assign
+          </h3>
+          <p className="text-xs text-white/45 mb-3">
+            They get the full reminder ladder. You get morning and evening roundups instead of each ping.
+          </p>
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setAssigning(true);
+              setMsg('');
+              try {
+                const { data } = await api.post(`/tasks/${task.id}/assign`, {
+                  email: assigneeEmail.trim() || null
+                });
+                setTask(data.task);
+                setAssigneeEmail(data.task?.assignee_email || assigneeEmail.trim());
+                onUpdated?.(data.task);
+                setMsg(data.message || 'Assigned');
+              } catch (err) {
+                setMsg(err.response?.data?.error || 'Failed to assign');
+              } finally {
+                setAssigning(false);
+              }
+            }}
+            className="flex flex-col sm:flex-row gap-2"
+          >
+            <input
+              type="email"
+              value={assigneeEmail}
+              onChange={(e) => setAssigneeEmail(e.target.value)}
+              placeholder="assignee@email.com"
+              className="flex-1 bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+            />
+            <button
+              type="submit"
+              disabled={assigning}
+              className="px-4 py-2 bg-amber-500/20 border border-amber-400/30 text-amber-100 rounded-lg text-sm hover:bg-amber-500/30 disabled:opacity-50"
+            >
+              {assigning ? 'Saving…' : 'Assign'}
+            </button>
+            {(task.assignee_user_id || assigneeEmail) && (
+              <button
+                type="button"
+                onClick={async () => {
+                  setAssigning(true);
+                  try {
+                    const { data } = await api.post(`/tasks/${task.id}/assign`, { email: null });
+                    setTask(data.task);
+                    setAssigneeEmail('');
+                    onUpdated?.(data.task);
+                    setMsg('Assignee cleared');
+                  } catch (err) {
+                    setMsg(err.response?.data?.error || 'Failed to clear');
+                  } finally {
+                    setAssigning(false);
+                  }
+                }}
+                className="px-3 py-2 text-white/40 hover:text-white text-sm"
+              >
+                Clear
+              </button>
+            )}
+          </form>
+        </div>
+      )}
+
       <div className="mb-6 backdrop-blur-sm bg-white/5 border border-white/10 rounded-xl p-4">
         <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
           <CalendarClock className="text-blue-400" size={16} />
@@ -111,8 +201,10 @@ export default function TaskDetailModal({ task: initialTask, onClose, onStartSes
             type="datetime-local"
             value={dueAt}
             onChange={(e) => setDueAt(e.target.value)}
-            className="flex-1 bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 [color-scheme:dark]"
+            disabled={!canEdit}
+            className="flex-1 bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 [color-scheme:dark] disabled:opacity-50"
           />
+          {canEdit && (
           <button
             onClick={handleSaveDue}
             disabled={saving}
@@ -120,7 +212,8 @@ export default function TaskDetailModal({ task: initialTask, onClose, onStartSes
           >
             Save due date
           </button>
-          {dueAt && (
+          )}
+          {canEdit && dueAt && (
             <button
               onClick={() => { setDueAt(''); savePatch({ due_at: null }); }}
               className="px-3 py-2 text-white/40 hover:text-white text-sm"
@@ -129,6 +222,9 @@ export default function TaskDetailModal({ task: initialTask, onClose, onStartSes
             </button>
           )}
         </div>
+        {!canEdit && (
+          <p className="text-xs text-white/40 mt-2">View only — you can’t change this task.</p>
+        )}
         {task.due_at && (
           <p className="text-xs text-white/40 mt-2">
             Auto-reminders (in-app + Slack) are set from estimated time + deadline.
@@ -296,7 +392,7 @@ export default function TaskDetailModal({ task: initialTask, onClose, onStartSes
       )}
 
       <div className="flex flex-col sm:flex-row gap-3">
-        {(task.status === 'todo' || task.status === 'doing') && (
+        {(task.status === 'todo' || task.status === 'doing') && canEdit && (
           <button
             onClick={() => { onStartSession(task); onClose(); }}
             className="flex-1 flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-green-500 to-blue-500 text-white rounded-lg font-semibold"
@@ -305,7 +401,7 @@ export default function TaskDetailModal({ task: initialTask, onClose, onStartSes
             Start Focus
           </button>
         )}
-        {task.status === 'doing' && (
+        {task.status === 'doing' && canEdit && (
           <button
             onClick={() => { onCompleteTask(task); onClose(); }}
             className="flex-1 flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-lg font-semibold"
@@ -314,12 +410,14 @@ export default function TaskDetailModal({ task: initialTask, onClose, onStartSes
             Complete
           </button>
         )}
+        {canDelete && (
         <button
           onClick={() => { onDeleteTask(task); onClose(); }}
           className="px-6 py-3 bg-red-500/20 hover:bg-red-500/30 text-red-200 rounded-lg"
         >
           Delete
         </button>
+        )}
       </div>
     </Modal>
   );

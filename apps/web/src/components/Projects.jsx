@@ -247,6 +247,9 @@ export default function Projects() {
                 >
                   <div className="flex items-start justify-between mb-4">
                     <h3 className="text-white font-semibold text-lg flex-1 pr-2">{project.title}</h3>
+                    {project.is_shared ? (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded border border-cyan-400/30 text-cyan-200">Shared</span>
+                    ) : (
                     <button
                       onClick={(e) => handleDeleteProject(project.id, e)}
                       className="opacity-0 group-hover:opacity-100 p-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-200 rounded transition-all"
@@ -254,6 +257,7 @@ export default function Projects() {
                     >
                       <Trash2 size={16} />
                     </button>
+                    )}
                   </div>
 
                   {showAITags && project.tags && project.tags.length > 0 && (

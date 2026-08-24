@@ -1,6 +1,7 @@
 const express = require('express');
 const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
+const { taskVisibleSql, projectVisibleSql, taskAccessSelectSql, withTaskAccessFlags } = require('../utils/access');
 
 const router = express.Router();
 
@@ -126,10 +127,13 @@ router.get('/today', authenticateToken, async (req, res) => {
         SELECT
           t.*,
           p.title as project_title,
-          p.description as project_description
+          p.description as project_description,
+          ${taskAccessSelectSql('$1')}
         FROM tasks t
         JOIN projects p ON t.project_id = p.id
-        WHERE p.user_id = $1
+        JOIN users owner ON p.user_id = owner.id
+        LEFT JOIN users assignee ON t.assignee_user_id = assignee.id
+        WHERE ${taskVisibleSql('$1')}
           AND (t.status != 'done' OR t.completed_at > NOW() - INTERVAL '7 days' OR t.updated_at > NOW() - INTERVAL '7 days')
         ORDER BY
           CASE WHEN t.due_at IS NULL THEN 1 ELSE 0 END,
@@ -142,18 +146,21 @@ router.get('/today', authenticateToken, async (req, res) => {
       query(`
         SELECT
           p.*,
+          owner.email as owner_email,
+          (p.user_id != $1) as is_shared,
           COUNT(t.id) as task_count,
           COUNT(CASE WHEN t.status = 'done' THEN 1 END) as completed_tasks
         FROM projects p
+        JOIN users owner ON p.user_id = owner.id
         LEFT JOIN tasks t ON p.id = t.project_id
-        WHERE p.user_id = $1
-        GROUP BY p.id
+        WHERE ${projectVisibleSql('$1')}
+        GROUP BY p.id, owner.email
         ORDER BY p.created_at DESC
       `, [user_id]),
       getTodayFreeMinutes(user_id)
     ]);
 
-    const annotated = tasksResult.rows.map((t) => annotateTask(t, now));
+    const annotated = tasksResult.rows.map((t) => annotateTask(withTaskAccessFlags(t), now));
     const openTasks = annotated.filter((t) => t.status !== 'done');
     const overdue = openTasks.filter((t) => t.urgency_bucket === 'overdue');
     const dueToday = openTasks.filter((t) => t.urgency_bucket === 'due_today');
@@ -199,12 +206,15 @@ router.get('/projects/:projectId', authenticateToken, async (req, res) => {
     const result = await query(`
       SELECT
         p.*,
+        owner.email as owner_email,
+        (p.user_id != $2) as is_shared,
         COUNT(t.id) as task_count,
         COUNT(CASE WHEN t.status = 'done' THEN 1 END) as completed_tasks
       FROM projects p
+      JOIN users owner ON p.user_id = owner.id
       LEFT JOIN tasks t ON p.id = t.project_id
-      WHERE p.id = $1 AND p.user_id = $2
-      GROUP BY p.id
+      WHERE p.id = $1 AND ${projectVisibleSql('$2')}
+      GROUP BY p.id, owner.email
     `, [projectId, user_id]);
 
     if (result.rows.length === 0) {

@@ -2,6 +2,7 @@ const express = require('express');
 const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { refreshAllAutoReminders } = require('../services/reminders');
+const { taskVisibleSql } = require('../utils/access');
 
 const router = express.Router();
 
@@ -33,7 +34,7 @@ router.post('/', authenticateToken, async (req, res) => {
     const taskCheck = await query(
       `SELECT t.id FROM tasks t
        JOIN projects p ON t.project_id = p.id
-       WHERE t.id = $1 AND p.user_id = $2`,
+       WHERE t.id = $1 AND ${taskVisibleSql('$2')}`,
       [task_id, user_id]
     );
     if (taskCheck.rows.length === 0) {

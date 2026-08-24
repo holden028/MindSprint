@@ -5,6 +5,7 @@ import LoadingSpinner from './LoadingSpinner';
 import ManualTaskModal from './ManualTaskModal';
 import { ArrowLeft, Clock, Flag, Trash2, Target, Plus, Repeat, LayoutTemplate } from 'lucide-react';
 import { getPriorityColor } from '../utils/colors';
+import ShareInvite from './ShareInvite';
 
 export default function ProjectView() {
   const { projectId } = useParams();
@@ -91,6 +92,9 @@ export default function ProjectView() {
 
         <div className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl p-8 mb-8">
           <h1 className="text-4xl font-bold text-white mb-4">{project.title}</h1>
+          {project.is_shared && (
+            <p className="text-cyan-200 text-sm mb-3">Shared with you by {project.owner_email}</p>
+          )}
           <p className="text-white/70 text-lg mb-6">{project.description || 'No description'}</p>
           
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
@@ -109,6 +113,7 @@ export default function ProjectView() {
           </div>
 
           <div className="mt-6 flex items-center gap-3">
+            {!project.is_shared && (
             <button
               onClick={async () => {
                 setSavingTemplate(true);
@@ -133,6 +138,11 @@ export default function ProjectView() {
               <LayoutTemplate size={16} />
               {savingTemplate ? 'Saving...' : 'Save as Template'}
             </button>
+            )}
+          </div>
+
+          <div className="mt-6">
+            <ShareInvite projectId={project.id} canShare={!project.is_shared} />
           </div>
 
           <div className="mt-4">
@@ -149,6 +159,7 @@ export default function ProjectView() {
         <div>
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-2xl font-bold text-white">Tasks</h2>
+            {!project.is_shared && (
             <button
               onClick={() => setShowAddTask(true)}
               className="flex items-center gap-2 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white px-4 py-2 rounded-xl transition-all text-sm font-medium"
@@ -156,6 +167,7 @@ export default function ProjectView() {
               <Plus size={16} />
               Add Task
             </button>
+            )}
           </div>
           
           {tasks.length === 0 ? (
@@ -285,11 +297,17 @@ function TaskCard({ task, onDelete, onStartSession, getPriorityColor, completed,
                 Recurring
               </span>
             )}
+            {task.assignee_email && (
+              <span className="text-[10px] text-amber-200">Assigned to {task.assignee_email}</span>
+            )}
+            {task.is_shared && (
+              <span className="text-[10px] text-cyan-300">{task.my_role === 'view' ? 'View only' : 'Shared'}</span>
+            )}
           </div>
         </div>
 
         <div className="flex items-center gap-2 ml-4">
-          {!completed && (task.status === 'todo' || task.status === 'doing') && (
+          {!completed && (task.status === 'todo' || task.status === 'doing') && task.can_edit !== false && (
             <button
               onClick={() => onStartSession(task.id, task.title)}
               className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-200 rounded transition-all opacity-0 group-hover:opacity-100"
@@ -298,6 +316,7 @@ function TaskCard({ task, onDelete, onStartSession, getPriorityColor, completed,
               <Target size={18} />
             </button>
           )}
+          {(task.can_delete ?? !task.is_shared) && (
           <button
             onClick={() => onDelete(task.id)}
             className="p-2 bg-red-500/20 hover:bg-red-500/30 text-red-200 rounded transition-all opacity-0 group-hover:opacity-100"
@@ -305,6 +324,7 @@ function TaskCard({ task, onDelete, onStartSession, getPriorityColor, completed,
           >
             <Trash2 size={18} />
           </button>
+          )}
         </div>
       </div>
     </div>

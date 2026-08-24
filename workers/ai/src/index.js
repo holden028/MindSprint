@@ -630,29 +630,34 @@ const statusAlertWorker = new Worker('status-alerts', async () => {
   const now = new Date();
 
   try {
-    // Overdue follow-ups (+30m and +2h after deadline), max via dedupe windows
+    // Overdue follow-ups — no 24h cutoff; slower nudges as tasks get older
     const overdue = await pool.query(
-      `SELECT t.*, p.user_id, p.title as project_title,
+      `SELECT t.*, p.user_id as owner_id, p.title as project_title,
+              COALESCE(t.assignee_user_id, p.user_id) as alert_user_id,
               u.slack_bot_token, u.slack_user_id, u.slack_webhook_url, u.app_base_url, u.timezone
        FROM tasks t
        JOIN projects p ON t.project_id = p.id
-       JOIN users u ON p.user_id = u.id
+       JOIN users u ON u.id = COALESCE(t.assignee_user_id, p.user_id)
        WHERE t.status != 'done'
          AND t.due_at IS NOT NULL
-         AND t.due_at < NOW()
-         AND t.due_at > NOW() - INTERVAL '24 hours'`
+         AND t.due_at < NOW()`
     );
 
     for (const task of overdue.rows) {
       const minsPast = (now - new Date(task.due_at)) / 60000;
       if (minsPast < 25) continue;
 
-      const interval = minsPast < 90 ? '90 minutes' : '4 hours';
-      if (await recentlyNotified(task.user_id, 'reminder_overdue', task.id, interval)) continue;
-      if (await recentlyNotified(task.user_id, 'reminder_deadline', task.id, '25 minutes')) continue;
+      const daysPast = minsPast / (60 * 24);
+      let interval = '4 hours';
+      if (daysPast >= 7) interval = '12 hours';
+      else if (minsPast < 90) interval = '90 minutes';
+
+      const alertUserId = task.alert_user_id;
+      if (await recentlyNotified(alertUserId, 'reminder_overdue', task.id, interval)) continue;
+      if (await recentlyNotified(alertUserId, 'reminder_deadline', task.id, '25 minutes')) continue;
 
       await emitAlert({
-        userId: task.user_id,
+        userId: alertUserId,
         task,
         kind: 'overdue',
         userSlack: task,
@@ -662,13 +667,14 @@ const statusAlertWorker = new Worker('status-alerts', async () => {
       console.log(`🔴 Overdue follow-up: ${task.title}`);
     }
 
-    // Urgent & not started (no focus session today)
+    // Urgent & not started (no focus session today) — assignee if set, else owner
     const urgent = await pool.query(
-      `SELECT t.*, p.user_id, p.title as project_title,
+      `SELECT t.*, p.user_id as owner_id, p.title as project_title,
+              COALESCE(t.assignee_user_id, p.user_id) as alert_user_id,
               u.slack_bot_token, u.slack_user_id, u.slack_webhook_url, u.app_base_url, u.timezone
        FROM tasks t
        JOIN projects p ON t.project_id = p.id
-       JOIN users u ON p.user_id = u.id
+       JOIN users u ON u.id = COALESCE(t.assignee_user_id, p.user_id)
        WHERE t.status = 'todo'
          AND (t.priority >= 4 OR t.urgency >= 4)
          AND (
@@ -677,15 +683,16 @@ const statusAlertWorker = new Worker('status-alerts', async () => {
          )
          AND NOT EXISTS (
            SELECT 1 FROM sessions s
-           WHERE s.task_id = t.id AND s.user_id = p.user_id
+           WHERE s.task_id = t.id AND s.user_id = COALESCE(t.assignee_user_id, p.user_id)
              AND s.started_at::date = CURRENT_DATE
          )`
     );
 
     for (const task of urgent.rows) {
-      if (await recentlyNotified(task.user_id, 'reminder_not_started', task.id, '4 hours')) continue;
+      const alertUserId = task.alert_user_id || task.user_id;
+      if (await recentlyNotified(alertUserId, 'reminder_not_started', task.id, '4 hours')) continue;
       await emitAlert({
-        userId: task.user_id,
+        userId: alertUserId,
         task,
         kind: 'not_started',
         userSlack: task,
@@ -726,7 +733,121 @@ const statusAlertWorker = new Worker('status-alerts', async () => {
 
 statusAlertWorker.on('failed', (job, err) => console.error('Status alert job failed:', err));
 
-// --- Morning digest (~9am local) ---
+function bucketByDue(tasks, now = new Date()) {
+  const todayEnd = new Date(now);
+  todayEnd.setHours(23, 59, 59, 999);
+  const overdue = [];
+  const dueToday = [];
+  const startToday = [];
+  const inProgress = [];
+  for (const t of tasks) {
+    if (t.status === 'doing') inProgress.push(t);
+    if (!t.due_at) continue;
+    const due = new Date(t.due_at);
+    const startBy = new Date(due.getTime() - ((t.est_minutes || 30) + 30) * 60000);
+    if (due < now) overdue.push(t);
+    else if (due <= todayEnd) dueToday.push(t);
+    else if (startBy <= todayEnd) startToday.push(t);
+  }
+  return { overdue, dueToday, startToday, inProgress };
+}
+
+function pushTaskLines(lines, heading, tasks, extra) {
+  if (!tasks.length) return;
+  lines.push(heading);
+  tasks.slice(0, 5).forEach((t) => {
+    const who = extra ? extra(t) : '';
+    lines.push(`• ${t.title}${who}`);
+  });
+}
+
+async function loadOwnerRoundupData(userId) {
+  const mine = await pool.query(
+    `SELECT t.*
+     FROM tasks t
+     JOIN projects p ON t.project_id = p.id
+     WHERE t.status != 'done'
+       AND (
+         (p.user_id = $1 AND t.assignee_user_id IS NULL)
+         OR t.assignee_user_id = $1
+       )
+     ORDER BY t.due_at ASC NULLS LAST
+     LIMIT 40`,
+    [userId]
+  );
+  const assignedOut = await pool.query(
+    `SELECT t.*, assignee.email as assignee_email
+     FROM tasks t
+     JOIN projects p ON t.project_id = p.id
+     LEFT JOIN users assignee ON t.assignee_user_id = assignee.id
+     WHERE p.user_id = $1
+       AND t.assignee_user_id IS NOT NULL
+       AND t.status != 'done'
+     ORDER BY t.due_at ASC NULLS LAST
+     LIMIT 40`,
+    [userId]
+  );
+  return { mine: mine.rows, assignedOut: assignedOut.rows };
+}
+
+async function sendOwnerDigest(user, kind) {
+  const frontendUrl = resolveAppBase(user.app_base_url);
+  const now = new Date();
+  const { mine, assignedOut } = await loadOwnerRoundupData(user.id);
+  const myBuckets = bucketByDue(mine, now);
+  const outBuckets = bucketByDue(assignedOut, now);
+  const stuck = assignedOut.filter((t) => t.status === 'todo' && t.due_at && new Date(t.due_at) < now);
+
+  const isEvening = kind === 'evening';
+  const lines = [isEvening ? '🌙 *MindSprint — Evening roundup*' : '☀️ *MindSprint — Today*'];
+
+  if (!isEvening) {
+    pushTaskLines(lines, `🔴 *Overdue (${myBuckets.overdue.length})*`, myBuckets.overdue);
+    pushTaskLines(lines, `🟠 *Due today (${myBuckets.dueToday.length})*`, myBuckets.dueToday, (t) => (
+      ` (${new Date(t.due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`
+    ));
+    pushTaskLines(lines, `🟡 *Start today (${myBuckets.startToday.length})*`, myBuckets.startToday);
+  } else {
+    pushTaskLines(lines, `🔴 *Your unassigned overdue (${myBuckets.overdue.length})*`, myBuckets.overdue);
+  }
+
+  if (assignedOut.length) {
+    lines.push(`👤 *Assigned out (${assignedOut.length})*`);
+    pushTaskLines(lines, `  Overdue (${outBuckets.overdue.length})`, outBuckets.overdue, (t) => (
+      t.assignee_email ? ` — ${t.assignee_email}` : ''
+    ));
+    pushTaskLines(lines, `  Due today (${outBuckets.dueToday.length})`, outBuckets.dueToday, (t) => (
+      t.assignee_email ? ` — ${t.assignee_email}` : ''
+    ));
+    pushTaskLines(lines, `  In progress (${outBuckets.inProgress.length})`, outBuckets.inProgress, (t) => (
+      t.assignee_email ? ` — ${t.assignee_email}` : ''
+    ));
+    if (stuck.length) {
+      pushTaskLines(lines, `  Stuck / not started (${stuck.length})`, stuck, (t) => (
+        t.assignee_email ? ` — ${t.assignee_email}` : ''
+      ));
+    }
+  }
+
+  const hasMine = isEvening
+    ? myBuckets.overdue.length > 0
+    : (myBuckets.overdue.length || myBuckets.dueToday.length || myBuckets.startToday.length);
+  if (!hasMine && assignedOut.length === 0) return false;
+
+  lines.push(`<${frontendUrl}/dashboard|Open Today plan>`);
+  const text = lines.join('\n');
+  const notifType = isEvening ? 'evening_roundup' : 'morning_digest';
+  const title = isEvening ? 'Evening roundup' : 'Morning plan';
+  await pool.query(
+    `INSERT INTO notifications (user_id, type, title, body)
+     VALUES ($1, $2, $3, $4)`,
+    [user.id, notifType, title, text.replace(/\*/g, '').slice(0, 800)]
+  );
+  await sendSlackDM(user, text);
+  return true;
+}
+
+// --- Morning (~9) + evening (~18) owner roundups ---
 
 const digestQueue = new Queue('morning-digest', { connection: redisConnection() });
 digestQueue.add('daily-digest', {}, {
@@ -734,85 +855,29 @@ digestQueue.add('daily-digest', {}, {
 }).catch((err) => console.error('Failed to schedule morning digest:', err));
 
 const digestWorker = new Worker('morning-digest', async () => {
-  console.log('☀️ Checking morning digests...');
+  console.log('☀️ Checking owner roundups...');
 
   try {
     const users = await pool.query(
-      `SELECT id, slack_bot_token, slack_user_id, slack_webhook_url, app_base_url, timezone FROM users
-       WHERE slack_bot_token IS NOT NULL OR slack_webhook_url IS NOT NULL`
+      `SELECT id, slack_bot_token, slack_user_id, slack_webhook_url, app_base_url, timezone FROM users`
     );
 
     for (const user of users.rows) {
       const tz = user.timezone || 'Europe/London';
-      // Fire in the 9:00–9:14 window in the user's timezone
-      if (getHourInTimezone(tz) !== 9) continue;
+      const hour = getHourInTimezone(tz);
 
-      if (await recentlyNotified(user.id, 'morning_digest', null, '20 hours')) continue;
-      const frontendUrl = resolveAppBase(user.app_base_url);
-
-      const tasks = await pool.query(
-        `SELECT t.*
-         FROM tasks t
-         JOIN projects p ON t.project_id = p.id
-         WHERE p.user_id = $1 AND t.status != 'done'
-           AND (
-             (t.due_at IS NOT NULL AND t.due_at < NOW())
-             OR (t.due_at IS NOT NULL AND t.due_at::date = CURRENT_DATE)
-             OR (t.due_at IS NOT NULL AND t.due_at - (COALESCE(t.est_minutes, 30) + 30) * INTERVAL '1 minute' <= (CURRENT_DATE + INTERVAL '1 day'))
-           )
-         ORDER BY t.due_at ASC NULLS LAST
-         LIMIT 20`,
-        [user.id]
-      );
-
-      if (tasks.rows.length === 0) continue;
-
-      const overdue = [];
-      const dueToday = [];
-      const startToday = [];
-      const now = new Date();
-      const todayEnd = new Date();
-      todayEnd.setHours(23, 59, 59, 999);
-
-      for (const t of tasks.rows) {
-        if (!t.due_at) continue;
-        const due = new Date(t.due_at);
-        const startBy = new Date(due.getTime() - ((t.est_minutes || 30) + 30) * 60000);
-        if (due < now) overdue.push(t);
-        else if (due <= todayEnd) dueToday.push(t);
-        else if (startBy <= todayEnd) startToday.push(t);
+      if (hour === 9) {
+        if (await recentlyNotified(user.id, 'morning_digest', null, '20 hours')) continue;
+        const sent = await sendOwnerDigest(user, 'morning');
+        if (sent) console.log(`☀️ Morning roundup sent to user ${user.id}`);
+      } else if (hour === 18) {
+        if (await recentlyNotified(user.id, 'evening_roundup', null, '20 hours')) continue;
+        const sent = await sendOwnerDigest(user, 'evening');
+        if (sent) console.log(`🌙 Evening roundup sent to user ${user.id}`);
       }
-
-      if (!overdue.length && !dueToday.length && !startToday.length) continue;
-
-      const lines = ['☀️ *MindSprint — Today*'];
-      if (overdue.length) {
-        lines.push(`🔴 *Overdue (${overdue.length})*`);
-        overdue.slice(0, 5).forEach((t) => lines.push(`• ${t.title}`));
-      }
-      if (dueToday.length) {
-        lines.push(`🟠 *Due today (${dueToday.length})*`);
-        dueToday.slice(0, 5).forEach((t) => {
-          lines.push(`• ${t.title} (${new Date(t.due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`);
-        });
-      }
-      if (startToday.length) {
-        lines.push(`🟡 *Start today (${startToday.length})*`);
-        startToday.slice(0, 5).forEach((t) => lines.push(`• ${t.title}`));
-      }
-      lines.push(`<${frontendUrl}/dashboard|Open Today plan>`);
-
-      const text = lines.join('\n');
-      await pool.query(
-        `INSERT INTO notifications (user_id, type, title, body)
-         VALUES ($1, 'morning_digest', 'Morning plan', $2)`,
-        [user.id, text.replace(/\*/g, '').slice(0, 500)]
-      );
-      await sendSlackDM(user, text);
-      console.log(`☀️ Morning digest sent to user ${user.id}`);
     }
   } catch (error) {
-    console.error('Morning digest error:', error);
+    console.error('Owner roundup error:', error);
   }
 }, { connection: redisConnection() });
 

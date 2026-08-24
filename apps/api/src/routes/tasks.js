@@ -2,9 +2,11 @@ const express = require('express');
 const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { assertTaskOwner, patchRow } = require('../utils/dbHelpers');
+const { assertTaskAccess, taskVisibleSql, taskAccessSelectSql, withTaskAccessFlags } = require('../utils/access');
 const { parseLimit, parseOffset } = require('../utils/pagination');
 const { updatePriorities } = require('../services/priorities');
-const { createAutoReminders } = require('../services/reminders');
+const { createAutoReminders, syncTaskReminders } = require('../services/reminders');
+const { normalizeEmail, assignTask } = require('../services/sharing');
 
 const router = express.Router();
 
@@ -56,7 +58,7 @@ router.get('/', authenticateToken, async (req, res) => {
     const offset = parseOffset(req.query.offset);
 
     const params = [user_id];
-    let where = 'WHERE p.user_id = $1';
+    let where = `WHERE ${taskVisibleSql('$1')}`;
 
     if (project_id) {
       params.push(project_id);
@@ -68,15 +70,18 @@ router.get('/', authenticateToken, async (req, res) => {
     const result = await query(`
       SELECT
         t.*,
-        p.title as project_title
+        p.title as project_title,
+        ${taskAccessSelectSql('$1')}
       FROM tasks t
       JOIN projects p ON t.project_id = p.id
+      JOIN users owner ON p.user_id = owner.id
+      LEFT JOIN users assignee ON t.assignee_user_id = assignee.id
       ${where}
       ORDER BY t.created_at DESC
       LIMIT $${params.length - 1} OFFSET $${params.length}
     `, params);
 
-    res.json({ tasks: result.rows, limit, offset });
+    res.json({ tasks: result.rows.map(withTaskAccessFlags), limit, offset });
   } catch (error) {
     console.error('Get tasks error:', error);
     res.status(500).json({ error: 'Failed to load tasks' });
@@ -162,8 +167,35 @@ async function updateTask(req, res) {
     const { id } = req.params;
     const updates = req.body;
 
-    const owned = await assertTaskOwner(res, id, user_id);
-    if (!owned) return;
+    const access = await assertTaskAccess(res, id, user_id, { requireEdit: true });
+    if (!access) return;
+
+    if (updates.assignee_email !== undefined) {
+      if (!access.is_owner) {
+        return res.status(403).json({ error: 'Only the owner can assign this task' });
+      }
+      const email = updates.assignee_email ? normalizeEmail(updates.assignee_email) : null;
+      if (email && !email.includes('@')) {
+        return res.status(400).json({ error: 'A valid assignee email is required' });
+      }
+      const assigned = await assignTask({
+        ownerId: user_id,
+        ownerEmail: req.user.email,
+        taskId: id,
+        projectId: access.project_id,
+        email
+      });
+      delete updates.assignee_email;
+      if (Object.keys(updates).length === 0) {
+        return res.json({
+          task: assigned.task,
+          pending: assigned.pending,
+          message: assigned.pending
+            ? 'Assigned. They will get reminders after they sign up.'
+            : 'Assigned.'
+        });
+      }
+    }
 
     const allowedFields = [
       'title', 'description', 'status', 'priority', 'urgency', 'est_minutes',
@@ -207,22 +239,63 @@ async function updateTask(req, res) {
     const task = result.rows[0];
     res.json({ task });
 
-    // Re-create auto-reminders if due_at changed
     if (updates.due_at !== undefined) {
-      const estMin = task.est_minutes || 30;
-      if (updates.due_at) {
-        createAutoReminders(user_id, id, new Date(updates.due_at), estMin).catch(err =>
-          console.error('Failed to update auto-reminders:', err)
-        );
-      } else {
-        query('DELETE FROM reminders WHERE task_id = $1 AND user_id = $2', [id, user_id]).catch(() => {});
-      }
+      syncTaskReminders(id).catch((err) =>
+        console.error('Failed to update auto-reminders:', err)
+      );
     }
   } catch (error) {
     console.error('Update task error:', error);
     res.status(500).json({ error: 'Failed to update task' });
   }
 }
+
+router.post('/:id/assign', authenticateToken, async (req, res) => {
+  try {
+    const { user_id, email: ownerEmail } = req.user;
+    const { id } = req.params;
+    const access = await assertTaskOwner(res, id, user_id);
+    if (!access) return;
+
+    const raw = req.body?.email ?? req.body?.assignee_email;
+    const email = raw ? normalizeEmail(raw) : null;
+    if (email && !email.includes('@')) {
+      return res.status(400).json({ error: 'A valid email is required' });
+    }
+    if (email && ownerEmail && email === normalizeEmail(ownerEmail)) {
+      return res.status(400).json({ error: 'Assign someone else — you already own this task' });
+    }
+
+    const assigned = await assignTask({
+      ownerId: user_id,
+      ownerEmail,
+      taskId: id,
+      projectId: access.project_id,
+      email
+    });
+
+    res.json({
+      task: {
+        ...assigned.task,
+        assignee_email: assigned.task.assignee_email || assigned.share?.invitee_email || null,
+        is_owner: true,
+        can_edit: true,
+        can_delete: true,
+        is_shared: false
+      },
+      share: assigned.share,
+      pending: assigned.pending,
+      message: email
+        ? (assigned.pending
+          ? `Assigned. They will get reminders after they sign up with ${email}.`
+          : 'Assigned. They get the reminder ladder; you get morning and evening roundups.')
+        : 'Assignee cleared.'
+    });
+  } catch (error) {
+    console.error('Assign task error:', error);
+    res.status(500).json({ error: 'Failed to assign task' });
+  }
+});
 
 router.patch('/:id', authenticateToken, updateTask);
 router.put('/:id', authenticateToken, updateTask);
