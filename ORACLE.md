@@ -182,6 +182,21 @@ In the app: **Settings → App URL** → save `https://yourname.duckdns.org` (fo
 
 ---
 
+## Auto-deploy (GitHub → VM)
+
+Pushes to `main` trigger `.github/workflows/deploy-oracle.yml`, which SSHs into the VM and rebuilds Docker.
+
+GitHub secrets (already used for this project):
+
+- `ORACLE_HOST` — e.g. `mindsprint0.duckdns.org`
+- `ORACLE_SSH_KEY` — private key for `ubuntu@` on the VM
+
+Manual run: GitHub → **Actions** → **Deploy Oracle** → **Run workflow**.
+
+This stays on Always Free; a rebuild does not add a hosting bill.
+
+---
+
 ## Useful commands
 
 ```bash
