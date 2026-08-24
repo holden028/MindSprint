@@ -6,6 +6,15 @@ import { ensureNotificationPermission, showLocalNotification } from '../utils/no
 
 const SEEN_KEY = 'mindsprint_seen_notif_ids';
 
+function notificationPermission() {
+  try {
+    if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+    return Notification.permission;
+  } catch {
+    return 'unsupported';
+  }
+}
+
 function loadSeen() {
   try {
     return new Set(JSON.parse(localStorage.getItem(SEEN_KEY) || '[]'));
@@ -23,7 +32,7 @@ export default function NotificationBell() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [pushReady, setPushReady] = useState(Notification?.permission === 'granted');
+  const [pushReady, setPushReady] = useState(() => notificationPermission() === 'granted');
   const ref = useRef(null);
   const seenRef = useRef(loadSeen());
   const navigate = useNavigate();
@@ -35,8 +44,7 @@ export default function NotificationBell() {
       setNotifications(items.slice(0, 20));
       setUnreadCount(items.filter((n) => !n.read).length);
 
-      // Browser/OS push for newly seen unread items
-      if (Notification.permission === 'granted') {
+      if (notificationPermission() === 'granted') {
         const seen = seenRef.current;
         for (const n of items) {
           if (!n.read && n.id && !seen.has(n.id)) {
@@ -48,7 +56,6 @@ export default function NotificationBell() {
             seen.add(n.id);
           }
         }
-        // Mark all fetched ids as seen so we don't re-notify after grant
         items.forEach((n) => { if (n.id) seen.add(n.id); });
         saveSeen(seen);
       }
@@ -110,6 +117,8 @@ export default function NotificationBell() {
     return `${Math.floor(hrs / 24)}d ago`;
   };
 
+  const canEnableBanners = notificationPermission() !== 'unsupported';
+
   return (
     <div className="relative" ref={ref}>
       <button
@@ -129,7 +138,7 @@ export default function NotificationBell() {
           <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
             <span className="text-sm font-semibold text-white">Notifications</span>
             <div className="flex items-center gap-2">
-              {!pushReady && 'Notification' in window && (
+              {!pushReady && canEnableBanners && (
                 <button onClick={enablePush} className="text-[10px] text-purple-300 hover:text-purple-200">
                   Enable banners
                 </button>

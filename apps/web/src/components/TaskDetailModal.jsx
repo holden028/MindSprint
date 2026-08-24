@@ -83,7 +83,7 @@ export default function TaskDetailModal({ task: initialTask, onClose, onStartSes
     setRecDays((prev) => (prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d]));
 
   return (
-    <Modal className="max-w-4xl p-6 sm:p-8 max-h-[90vh] overflow-y-auto">
+    <Modal className="max-w-4xl" onClose={onClose}>
       <div className="flex justify-between items-start mb-6">
         <div className="flex-1 min-w-0">
           <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2 break-words">{task.title}</h2>

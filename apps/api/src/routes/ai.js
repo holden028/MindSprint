@@ -3,6 +3,7 @@ const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { chatJson } = require('../config/openai');
 const { updatePriorities } = require('../services/priorities');
+const { createAutoReminders } = require('../services/reminders');
 
 const router = express.Router();
 const AUTO_TAG_CAP = 40;
@@ -483,7 +484,7 @@ Rules:
 // --- AI Chat Assistant ---
 
 async function getFullUserContext(userId) {
-  const [tasksResult, projectsResult, blocksResult, sessionsResult] = await Promise.all([
+  const [tasksResult, projectsResult, blocksResult, sessionsResult, userResult] = await Promise.all([
     query(`
       SELECT t.id, t.title, t.description, t.status, t.priority, t.urgency, t.est_minutes, t.due_at, p.title as project_title
       FROM tasks t JOIN projects p ON t.project_id = p.id
@@ -498,12 +499,19 @@ async function getFullUserContext(userId) {
       FROM sessions s LEFT JOIN tasks t ON s.task_id = t.id
       WHERE s.user_id = $1 AND s.completed = true
       ORDER BY s.started_at DESC LIMIT 10
-    `, [userId])
+    `, [userId]),
+    query('SELECT timezone FROM users WHERE id = $1', [userId])
   ]);
 
-  const now = new Date();
+  const { formatNowInTimezone } = require('../utils/timezone');
+  const timeZone = userResult.rows[0]?.timezone || 'Europe/London';
+  const nowDate = new Date();
+  const nowLabel = formatNowInTimezone(timeZone, nowDate);
+
   const taskList = tasksResult.rows.map(t => {
-    const due = t.due_at ? `due ${new Date(t.due_at).toLocaleString()}` : 'no deadline';
+    const due = t.due_at
+      ? `due ${new Date(t.due_at).toLocaleString('en-GB', { timeZone })}`
+      : 'no deadline';
     return `- [${t.status}] "${t.title}" (P${t.priority}/U${t.urgency}, ${t.est_minutes}min, ${due}, project: ${t.project_title})`;
   }).join('\n');
 
@@ -512,8 +520,8 @@ async function getFullUserContext(userId) {
   const scheduleList = blocksResult.rows.map(b => {
     const rule = b.recurrence_rule;
     const days = rule?.days ? rule.days.join(', ') : 'one-time';
-    const start = new Date(b.starts_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const end = new Date(b.ends_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const start = new Date(b.starts_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone });
+    const end = new Date(b.ends_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone });
     return `- "${b.title}" ${start}-${end} (${days})`;
   }).join('\n');
 
@@ -521,7 +529,15 @@ async function getFullUserContext(userId) {
     `- ${s.task_title || 'Unnamed'}: planned ${s.duration_minutes}min, actual ${s.actual_duration_minutes || '?'}min, rating ${s.self_rating || '?'}/10`
   ).join('\n');
 
-  return { taskList, projectList, scheduleList, sessionHistory, now: now.toISOString(), projects: projectsResult.rows };
+  return {
+    taskList,
+    projectList,
+    scheduleList,
+    sessionHistory,
+    now: nowLabel,
+    timezone: timeZone,
+    projects: projectsResult.rows
+  };
 }
 
 router.post('/chat', authenticateToken, async (req, res) => {
@@ -531,7 +547,7 @@ router.post('/chat', authenticateToken, async (req, res) => {
 
     if (!message?.trim()) return res.status(400).json({ error: 'Message is required' });
 
-    const { taskList, projectList, scheduleList, sessionHistory, now, projects } = await getFullUserContext(user_id);
+    const { taskList, projectList, scheduleList, sessionHistory, now, timezone, projects } = await getFullUserContext(user_id);
 
     // Load or create conversation
     let conversation;
@@ -543,7 +559,7 @@ router.post('/chat', authenticateToken, async (req, res) => {
     const prevMessages = conversation?.messages || [];
     const historyContext = prevMessages.slice(-10).map(m => `${m.role}: ${m.content}`).join('\n');
 
-    const systemPrompt = `You are MindSprint AI — a smart productivity assistant for an ADHD-friendly task management app. Today is ${now}.
+    const systemPrompt = `You are MindSprint AI — a smart productivity assistant for an ADHD-friendly task management app. The user's local time is ${now} (timezone: ${timezone}). Always answer time/date questions using this local time — never UTC unless they ask for UTC.
 
 CURRENT TASKS:
 ${taskList || 'No tasks yet.'}
@@ -566,6 +582,11 @@ You can perform ACTIONS by including a JSON block in your response wrapped in <a
 
 2. Update a task:
 <action>{"type":"update_task","task_title":"exact existing task title","updates":{"status":"done","priority":4,"due_at":"ISO date"}}</action>
+
+IMPORTANT — DUE DATES:
+- Prefer always setting due_at when creating tasks (ask the user for a deadline if unclear).
+- If CURRENT TASKS shows "no deadline", proactively mention those tasks by name and offer to set due dates via update_task.
+- A background system also Slack-pings the user when open tasks lack due dates; reinforce that in chat when relevant.
 
 3. Block out time on the schedule:
 <action>{"type":"create_time_block","title":"...","date":"YYYY-MM-DD","start_time":"HH:MM","end_time":"HH:MM","recurrence_days":["mon","wed","fri"] or null}</action>
@@ -631,23 +652,9 @@ RULES:
 
           const task = taskResult.rows[0];
 
-          // Auto-create reminders if due_at set
+          // Auto-create typed reminder ladder if due_at set
           if (action.due_at) {
-            const dueDate = new Date(action.due_at);
-            const estMin = action.est_minutes || 30;
-            const reminders = [];
-            const nowD = new Date();
-            const startBy = new Date(dueDate.getTime() - (estMin + 30) * 60000);
-            if (startBy > nowD) reminders.push(startBy);
-            const fifteenBefore = new Date(dueDate.getTime() - 15 * 60000);
-            if (fifteenBefore > nowD && fifteenBefore.getTime() !== startBy.getTime()) reminders.push(fifteenBefore);
-
-            for (const remindAt of reminders) {
-              for (const channel of ['in_app', 'slack']) {
-                await query('INSERT INTO reminders (task_id, user_id, remind_at, channel) VALUES ($1, $2, $3, $4)',
-                  [task.id, user_id, remindAt, channel]);
-              }
-            }
+            await createAutoReminders(user_id, task.id, new Date(action.due_at), action.est_minutes || 30);
           }
 
           executedActions.push({ type: 'create_task', task });

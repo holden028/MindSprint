@@ -424,9 +424,19 @@ export default function CalendarPage() {
       </div>
 
       {slotModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setSlotModal(null)}>
+        <div
+          className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm
+                     pt-[env(safe-area-inset-top)]
+                     pb-[calc(4.5rem+env(safe-area-inset-bottom))] sm:pb-[env(safe-area-inset-bottom)]
+                     px-0 sm:px-4"
+          onClick={() => setSlotModal(null)}
+        >
           <div
-            className="w-full max-w-md backdrop-blur-xl bg-gray-900/95 border border-white/20 rounded-2xl p-5"
+            className="w-full max-w-md backdrop-blur-xl bg-gray-950/95 sm:bg-gray-900/95 border border-white/20
+                       rounded-t-2xl sm:rounded-2xl p-4 sm:p-5
+                       max-h-[min(92dvh,calc(100dvh-env(safe-area-inset-top)-5.5rem-env(safe-area-inset-bottom)))]
+                       overflow-y-auto overscroll-contain"
+            style={{ WebkitOverflowScrolling: 'touch' }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">

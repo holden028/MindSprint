@@ -1,6 +1,8 @@
 const express = require('express');
 const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
+const { normalizeAppBaseUrl } = require('../utils/appBaseUrl');
+const { normalizeTimezone } = require('../utils/timezone');
 
 const router = express.Router();
 
@@ -266,7 +268,7 @@ router.get('/settings', authenticateToken, async (req, res) => {
   try {
     const { user_id } = req.user;
     const result = await query(
-      'SELECT slack_webhook_url, slack_user_id, slack_bot_token FROM users WHERE id = $1',
+      'SELECT slack_webhook_url, slack_user_id, slack_bot_token, app_base_url, timezone FROM users WHERE id = $1',
       [user_id]
     );
     res.json(result.rows[0] || {});
@@ -280,7 +282,7 @@ router.get('/settings', authenticateToken, async (req, res) => {
 router.put('/', authenticateToken, async (req, res) => {
   try {
     const { user_id } = req.user;
-    const { slack_webhook_url, slack_user_id, slack_bot_token } = req.body;
+    const { slack_webhook_url, slack_user_id, slack_bot_token, app_base_url, timezone } = req.body;
 
     const fields = [];
     const values = [];
@@ -298,6 +300,26 @@ router.put('/', authenticateToken, async (req, res) => {
       fields.push(`slack_bot_token = $${idx++}`);
       values.push(slack_bot_token);
     }
+    if (app_base_url !== undefined) {
+      let normalized = null;
+      try {
+        normalized = normalizeAppBaseUrl(app_base_url);
+      } catch (e) {
+        return res.status(400).json({ error: e.message });
+      }
+      fields.push(`app_base_url = $${idx++}`);
+      values.push(normalized);
+    }
+    if (timezone !== undefined) {
+      let tz;
+      try {
+        tz = normalizeTimezone(timezone || 'Europe/London');
+      } catch (e) {
+        return res.status(400).json({ error: e.message });
+      }
+      fields.push(`timezone = $${idx++}`);
+      values.push(tz);
+    }
 
     if (fields.length === 0) {
       return res.status(400).json({ error: 'No valid fields to update' });
@@ -305,7 +327,8 @@ router.put('/', authenticateToken, async (req, res) => {
 
     values.push(user_id);
     const result = await query(
-      `UPDATE users SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, email, slack_webhook_url`,
+      `UPDATE users SET ${fields.join(', ')} WHERE id = $${idx}
+       RETURNING id, email, slack_webhook_url, app_base_url, timezone`,
       values
     );
 

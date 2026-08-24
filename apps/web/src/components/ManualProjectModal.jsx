@@ -51,7 +51,7 @@ export default function ManualProjectModal({ onClose, onSuccess }) {
   };
 
   return (
-    <Modal className="max-w-lg p-6">
+    <Modal className="max-w-lg" onClose={onClose}>
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold text-white flex items-center gap-2">
             <FolderPlus className="text-purple-300" size={24} />

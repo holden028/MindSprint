@@ -34,6 +34,8 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
       - AI_MODEL=${AI_MODEL}
       - MIGRATIONS_DIR=/sql/migrations
+      - TZ=Europe/London
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5174}
     depends_on:
       - postgres
       - redis
@@ -54,6 +56,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
       - AI_MODEL=${AI_MODEL}
+      - TZ=Europe/London
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5174}
     depends_on:
       - postgres
       - redis

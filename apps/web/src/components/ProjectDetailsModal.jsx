@@ -33,7 +33,7 @@ export default function ProjectDetailsModal({ project, onClose, onViewTasks }) {
   };
 
   return (
-    <Modal className="max-w-4xl p-8">
+    <Modal className="max-w-4xl" onClose={onClose}>
         <div className="flex justify-between items-start mb-6">
           <div className="flex-1">
             <h2 className="text-3xl font-bold text-white mb-2">{project.title}</h2>

@@ -27,7 +27,7 @@ export default function Header() {
   ];
 
   return (
-    <header className="backdrop-blur-md bg-white/10 border-b border-white/20 sticky top-0 z-50">
+    <header className="backdrop-blur-md bg-white/10 border-b border-white/20 sticky top-0 z-50 pt-[env(safe-area-inset-top)]">
       <div className="w-full px-4 sm:px-6">
         <div className="flex items-center h-14 gap-4">
           <h1 className="text-xl font-bold text-white whitespace-nowrap">MindSprint</h1>

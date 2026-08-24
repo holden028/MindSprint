@@ -58,7 +58,7 @@ function SessionCompletionModal({
   if (!isOpen) return null;
 
   return (
-    <Modal isOpen={isOpen} className="max-w-3xl p-8">
+    <Modal isOpen={isOpen} onClose={onClose} className="max-w-3xl">
         <button
           onClick={onClose}
           className="absolute top-4 right-4 text-white/60 hover:text-white transition-colors"

@@ -110,21 +110,22 @@ function ManualTaskModal({ onComplete, onClose, projectId = null }) {
 
   return (
     <>
-    <Modal className="max-w-2xl p-8">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-2xl font-bold text-white flex items-center space-x-2">
-            <Target className="h-6 w-6" />
+    <Modal className="max-w-2xl" onClose={onClose}>
+        <div className="flex items-center justify-between mb-4 sm:mb-6">
+          <h2 className="text-xl sm:text-2xl font-bold text-white flex items-center space-x-2">
+            <Target className="h-5 w-5 sm:h-6 sm:w-6 shrink-0" />
             <span>Create Manual Task</span>
           </h2>
           <button
             onClick={onClose}
-            className="text-white/60 hover:text-white transition-colors"
+            className="text-white/60 hover:text-white transition-colors p-1 -mr-1"
+            type="button"
           >
             <X className="h-6 w-6" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-6">
           {/* Task Title */}
           <div>
             <label className="block text-sm font-medium text-white/80 mb-2">
@@ -339,7 +340,7 @@ function ManualTaskModal({ onComplete, onClose, projectId = null }) {
             />
             {formData.due_at && (
               <p className="text-xs text-white/40 mt-1.5">
-                Reminders will be sent automatically via in-app + Slack based on the estimated time and deadline.
+                Auto ladder: morning of due day → start-by → due soon → at deadline (+ overdue follow-ups). In-app + Slack.
               </p>
             )}
           </div>

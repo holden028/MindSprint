@@ -38,7 +38,7 @@ export default function TaskFeedbackModal({ task, onClose, onSubmit }) {
   };
 
   return (
-    <Modal className="max-w-lg p-6">
+    <Modal className="max-w-lg" onClose={onClose}>
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold text-white">Task Feedback</h2>
           <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-all">

@@ -4,6 +4,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { assertTaskOwner, patchRow } = require('../utils/dbHelpers');
 const { parseLimit, parseOffset } = require('../utils/pagination');
 const { updatePriorities } = require('../services/priorities');
+const { createAutoReminders } = require('../services/reminders');
 
 const router = express.Router();
 
@@ -44,42 +45,6 @@ function computeNextOccurrence(rule, fromDate = new Date()) {
   }
 
   return next;
-}
-
-async function createAutoReminders(userId, taskId, dueDate, estMinutes = 30) {
-  // Delete existing auto-reminders for this task before creating new ones
-  await query('DELETE FROM reminders WHERE task_id = $1 AND user_id = $2', [taskId, userId]);
-
-  const reminders = [];
-  const now = new Date();
-
-  // Reminder 1: "start by" time = due - est_minutes - 30min buffer
-  const startBy = new Date(dueDate.getTime() - (estMinutes + 30) * 60000);
-  if (startBy > now) {
-    reminders.push(startBy);
-  }
-
-  // Reminder 2: 15 min before deadline
-  const fifteenBefore = new Date(dueDate.getTime() - 15 * 60000);
-  if (fifteenBefore > now && fifteenBefore.getTime() !== startBy.getTime()) {
-    reminders.push(fifteenBefore);
-  }
-
-  // Reminder 3: morning of due day (9am) if due_at is tomorrow or later
-  const dueDay9am = new Date(dueDate);
-  dueDay9am.setHours(9, 0, 0, 0);
-  if (dueDay9am > now && dueDay9am.getTime() !== startBy.getTime() && dueDay9am.getTime() !== fifteenBefore.getTime()) {
-    reminders.push(dueDay9am);
-  }
-
-  for (const remindAt of reminders) {
-    for (const channel of ['in_app', 'slack']) {
-      await query(
-        'INSERT INTO reminders (task_id, user_id, remind_at, channel) VALUES ($1, $2, $3, $4)',
-        [taskId, userId, remindAt, channel]
-      );
-    }
-  }
 }
 
 // Get tasks for user (optional project_id filter)

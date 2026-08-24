@@ -7,16 +7,20 @@ export function registerServiceWorker() {
   });
 }
 
-export async function ensureNotificationPermission() {
-  if (!('Notification' in window)) return 'unsupported';
-  if (Notification.permission === 'granted') return 'granted';
-  if (Notification.permission === 'denied') return 'denied';
-  return Notification.requestPermission();
+export function ensureNotificationPermission() {
+  try {
+    if (!('Notification' in window)) return Promise.resolve('unsupported');
+    if (Notification.permission === 'granted') return Promise.resolve('granted');
+    if (Notification.permission === 'denied') return Promise.resolve('denied');
+    return Notification.requestPermission();
+  } catch {
+    return Promise.resolve('unsupported');
+  }
 }
 
 export function showLocalNotification(title, options = {}) {
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
   try {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
     const n = new Notification(title, {
       icon: '/icons/icon-192.svg',
       badge: '/icons/icon-192.svg',
@@ -34,8 +38,8 @@ export function showLocalNotification(title, options = {}) {
           icon: '/icons/icon-192.svg',
           badge: '/icons/icon-192.svg',
           ...options
-        });
-      });
+        }).catch(() => {});
+      }).catch(() => {});
     }
   }
 }

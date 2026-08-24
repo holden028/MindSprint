@@ -386,62 +386,437 @@ const reminderWorker = new Worker('reminders', async () => {
   console.log('🔔 Processing due reminders...');
   try {
     const dueReminders = await pool.query(
-      `SELECT r.*, t.title as task_title, u.slack_webhook_url, u.slack_user_id, u.slack_bot_token
+      `SELECT r.*, t.title as task_title, t.status as task_status, t.due_at, t.est_minutes,
+              t.priority, t.urgency, t.project_id,
+              u.slack_webhook_url, u.slack_user_id, u.slack_bot_token, u.app_base_url, u.timezone
        FROM reminders r
        JOIN tasks t ON r.task_id = t.id
        JOIN users u ON r.user_id = u.id
-       WHERE r.remind_at <= NOW() AND r.sent = false`
+       WHERE r.remind_at <= NOW() AND r.sent = false
+       ORDER BY r.remind_at ASC`
     );
 
     for (const reminder of dueReminders.rows) {
-      await pool.query(
-        `INSERT INTO notifications (user_id, type, title, body, task_id)
-         VALUES ($1, 'reminder', $2, $3, $4)`,
-        [
-          reminder.user_id,
-          `Reminder: ${reminder.task_title}`,
-          `Your reminder for "${reminder.task_title}" is due.`,
-          reminder.task_id
-        ]
-      );
+      // Skip if task already done
+      if (reminder.task_status === 'done') {
+        await pool.query('UPDATE reminders SET sent = true WHERE id = $1', [reminder.id]);
+        continue;
+      }
+
+      const kind = reminder.kind || 'custom';
+      const frontendUrl = resolveAppBase(reminder.app_base_url);
+      const copy = buildReminderCopy(kind, reminder, frontendUrl);
+      const quiet = isQuietHours(reminder.timezone || 'Europe/London');
+
+      // Only create in-app notification once per logical event (prefer in_app row)
+      if (reminder.channel === 'in_app') {
+        await pool.query(
+          `INSERT INTO notifications (user_id, type, title, body, task_id)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [reminder.user_id, copy.notifType, copy.title, copy.body, reminder.task_id]
+        );
+      }
 
       if (reminder.channel === 'slack') {
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5174';
-        const msg = `🔔 *Reminder: ${reminder.task_title}*\n<${frontendUrl}/dashboard|Open MindSprint>`;
-
-        try {
-          if (reminder.slack_bot_token && reminder.slack_user_id) {
-            await fetch('https://slack.com/api/chat.postMessage', {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${reminder.slack_bot_token}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({ channel: reminder.slack_user_id, text: msg })
-            });
-          } else if (reminder.slack_webhook_url) {
-            const mention = reminder.slack_user_id ? `<@${reminder.slack_user_id}> ` : '';
-            await fetch(reminder.slack_webhook_url, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: `${mention}${msg}` })
-            });
-          }
-        } catch (slackErr) {
-          console.error('Slack notification failed:', slackErr.message);
+        // Quiet hours: keep in-app, skip Slack (morning digest will cover)
+        if (quiet && kind !== 'deadline' && kind !== 'overdue') {
+          await pool.query('UPDATE reminders SET sent = true WHERE id = $1', [reminder.id]);
+          continue;
         }
+        // Avoid stacking different kinds within 20 minutes (allow dual-channel same kind)
+        const recent = await pool.query(
+          `SELECT id FROM notifications
+           WHERE user_id = $1 AND task_id = $2
+             AND type LIKE 'reminder_%'
+             AND type <> $3
+             AND created_at > NOW() - INTERVAL '20 minutes'
+           LIMIT 1`,
+          [reminder.user_id, reminder.task_id, copy.notifType]
+        );
+        if (recent.rows.length > 0 && kind !== 'deadline' && kind !== 'overdue' && kind !== 'custom') {
+          await pool.query('UPDATE reminders SET sent = true WHERE id = $1', [reminder.id]);
+          continue;
+        }
+
+        await sendSlackDM(reminder, copy.slackText);
       }
 
       await pool.query('UPDATE reminders SET sent = true WHERE id = $1', [reminder.id]);
-      console.log(`🔔 Sent reminder for "${reminder.task_title}"`);
+      console.log(`🔔 Sent ${kind}/${reminder.channel} for "${reminder.task_title}"`);
     }
   } catch (error) {
     console.error('Reminder processing error:', error);
   }
 }, { connection: redisConnection() });
 
+function resolveAppBase(userBaseUrl) {
+  const raw = (userBaseUrl || process.env.FRONTEND_URL || 'http://localhost:5174').trim().replace(/\/+$/, '');
+  if (!raw) return 'http://localhost:5174';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `http://${raw}`;
+}
+
+function taskLink(base, projectId, taskId) {
+  const b = (base || '').replace(/\/+$/, '');
+  if (!projectId) return `${b}/dashboard${taskId ? `?task=${taskId}` : ''}`;
+  return `${b}/projects/${projectId}${taskId ? `?task=${taskId}` : ''}`;
+}
+
+function getHourInTimezone(timeZone = 'Europe/London', date = new Date()) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timeZone || 'Europe/London',
+      hour: 'numeric',
+      hourCycle: 'h23'
+    }).formatToParts(date);
+    return Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
+  } catch {
+    return date.getHours();
+  }
+}
+
+function isQuietHours(timeZone = 'Europe/London', date = new Date()) {
+  const hour = getHourInTimezone(timeZone, date);
+  return hour >= 22 || hour < 7;
+}
+
+function formatDue(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+  });
+}
+
+function buildReminderCopy(kind, reminder, frontendUrl) {
+  const title = reminder.task_title;
+  const due = formatDue(reminder.due_at);
+  const est = reminder.est_minutes || 30;
+  const link = taskLink(frontendUrl, reminder.project_id, reminder.task_id);
+  const open = `<${link}|Open task> · <${frontendUrl.replace(/\/+$/, '')}/dashboard|Today>`;
+
+  switch (kind) {
+    case 'morning':
+      return {
+        notifType: 'reminder_morning',
+        title: `Today: ${title}`,
+        body: due ? `Due ${due} · ~${est} min` : `On today's list · ~${est} min`,
+        slackText: `☀️ *Today:* ${title}\n${due ? `Due ${due} · ` : ''}~${est} min\n${open}`
+      };
+    case 'start_by':
+      return {
+        notifType: 'reminder_start_by',
+        title: `Start now: ${title}`,
+        body: due ? `Leave buffer before deadline (${due}) · ~${est} min` : `Time to start · ~${est} min`,
+        slackText: `🟡 *Start now:* ${title}\n${due ? `Due ${due} · ` : ''}~${est} min — leave buffer before the deadline\n${open}`
+      };
+    case 'due_soon':
+      return {
+        notifType: 'reminder_due_soon',
+        title: `Due soon: ${title}`,
+        body: `Deadline in ~15 minutes${due ? ` (${due})` : ''}`,
+        slackText: `🟠 *Due in 15 min:* ${title}\nStill open — start a focus session or move the deadline\n${open}`
+      };
+    case 'deadline':
+      return {
+        notifType: 'reminder_deadline',
+        title: `Deadline now: ${title}`,
+        body: `This was due ${due || 'now'} and is still open`,
+        slackText: `🔴 *Deadline:* ${title}\nWas due ${due || 'now'} — still open\n${open}`
+      };
+    case 'overdue':
+      return {
+        notifType: 'reminder_overdue',
+        title: `Overdue: ${title}`,
+        body: `Still open past ${due || 'the deadline'}`,
+        slackText: `🔴 *Overdue:* ${title}\nStill open past ${due || 'the deadline'}\n${open}`
+      };
+    case 'not_started':
+      return {
+        notifType: 'reminder_not_started',
+        title: `Urgent & not started: ${title}`,
+        body: `P${reminder.priority}/U${reminder.urgency}${due ? ` · due ${due}` : ''} · no focus session yet`,
+        slackText: `⚡ *Urgent & not started:* ${title}\nP${reminder.priority}/U${reminder.urgency}${due ? ` · due ${due}` : ''} · 0 focus time logged today\n${open}`
+      };
+    case 'missing_due':
+      return {
+        notifType: 'reminder_missing_due',
+        title: `No due date: ${title}`,
+        body: reminder.project_title
+          ? `"${title}" in ${reminder.project_title} has no due date`
+          : `"${title}" has no due date`,
+        slackText: `📅 *Missing due date:* ${title}\n${reminder.project_title ? `_Project: ${reminder.project_title}_\n` : ''}Add a deadline so MindSprint can remind you.\n${open}`
+      };
+    default:
+      return {
+        notifType: 'reminder_custom',
+        title: `Reminder: ${title}`,
+        body: `Your reminder for "${title}" is due.`,
+        slackText: `🔔 *Reminder:* ${title}\n${open}`
+      };
+  }
+}
+
+async function sendSlackDM(userRow, text) {
+  try {
+    if (userRow.slack_bot_token && userRow.slack_user_id) {
+      await fetch('https://slack.com/api/chat.postMessage', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${userRow.slack_bot_token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ channel: userRow.slack_user_id, text })
+      });
+    } else if (userRow.slack_webhook_url) {
+      const mention = userRow.slack_user_id ? `<@${userRow.slack_user_id}> ` : '';
+      await fetch(userRow.slack_webhook_url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: `${mention}${text}` })
+      });
+    }
+  } catch (err) {
+    console.error('Slack DM failed:', err.message);
+  }
+}
+
+async function recentlyNotified(userId, type, taskId, interval) {
+  const result = await pool.query(
+    `SELECT id FROM notifications
+     WHERE user_id = $1 AND type = $2
+       AND ($3::uuid IS NULL OR task_id = $3)
+       AND created_at > NOW() - ($4)::interval
+     LIMIT 1`,
+    [userId, type, taskId || null, interval]
+  );
+  return result.rows.length > 0;
+}
+
+async function emitAlert({ userId, task, kind, userSlack, frontendUrl, timeZone }) {
+  const copy = buildReminderCopy(kind, {
+    task_title: task.title,
+    due_at: task.due_at,
+    est_minutes: task.est_minutes,
+    priority: task.priority,
+    urgency: task.urgency,
+    task_id: task.id,
+    project_id: task.project_id,
+    project_title: task.project_title
+  }, frontendUrl);
+
+  await pool.query(
+    `INSERT INTO notifications (user_id, type, title, body, task_id)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [userId, copy.notifType, copy.title, copy.body, task.id]
+  );
+
+  if (!isQuietHours(timeZone || 'Europe/London') || kind === 'overdue' || kind === 'missing_due') {
+    await sendSlackDM(userSlack, copy.slackText);
+  }
+}
+
 recurringWorker.on('failed', (job, err) => console.error('Recurring job failed:', err));
 reminderWorker.on('failed', (job, err) => console.error('Reminder job failed:', err));
+
+// --- Status alerts: overdue follow-ups + urgent not-started ---
+
+const statusAlertQueue = new Queue('status-alerts', { connection: redisConnection() });
+statusAlertQueue.add('check-status', {}, {
+  repeat: { every: 5 * 60 * 1000 }
+}).catch((err) => console.error('Failed to schedule status alerts:', err));
+
+const statusAlertWorker = new Worker('status-alerts', async () => {
+  console.log('🚨 Checking overdue / not-started / missing due dates...');
+  const now = new Date();
+
+  try {
+    // Overdue follow-ups (+30m and +2h after deadline), max via dedupe windows
+    const overdue = await pool.query(
+      `SELECT t.*, p.user_id, p.title as project_title,
+              u.slack_bot_token, u.slack_user_id, u.slack_webhook_url, u.app_base_url, u.timezone
+       FROM tasks t
+       JOIN projects p ON t.project_id = p.id
+       JOIN users u ON p.user_id = u.id
+       WHERE t.status != 'done'
+         AND t.due_at IS NOT NULL
+         AND t.due_at < NOW()
+         AND t.due_at > NOW() - INTERVAL '24 hours'`
+    );
+
+    for (const task of overdue.rows) {
+      const minsPast = (now - new Date(task.due_at)) / 60000;
+      if (minsPast < 25) continue;
+
+      const interval = minsPast < 90 ? '90 minutes' : '4 hours';
+      if (await recentlyNotified(task.user_id, 'reminder_overdue', task.id, interval)) continue;
+      if (await recentlyNotified(task.user_id, 'reminder_deadline', task.id, '25 minutes')) continue;
+
+      await emitAlert({
+        userId: task.user_id,
+        task,
+        kind: 'overdue',
+        userSlack: task,
+        frontendUrl: resolveAppBase(task.app_base_url),
+        timeZone: task.timezone
+      });
+      console.log(`🔴 Overdue follow-up: ${task.title}`);
+    }
+
+    // Urgent & not started (no focus session today)
+    const urgent = await pool.query(
+      `SELECT t.*, p.user_id, p.title as project_title,
+              u.slack_bot_token, u.slack_user_id, u.slack_webhook_url, u.app_base_url, u.timezone
+       FROM tasks t
+       JOIN projects p ON t.project_id = p.id
+       JOIN users u ON p.user_id = u.id
+       WHERE t.status = 'todo'
+         AND (t.priority >= 4 OR t.urgency >= 4)
+         AND (
+           (t.due_at IS NOT NULL AND t.due_at::date <= CURRENT_DATE)
+           OR (t.due_at IS NOT NULL AND t.due_at - (COALESCE(t.est_minutes, 30) + 30) * INTERVAL '1 minute' <= NOW())
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM sessions s
+           WHERE s.task_id = t.id AND s.user_id = p.user_id
+             AND s.started_at::date = CURRENT_DATE
+         )`
+    );
+
+    for (const task of urgent.rows) {
+      if (await recentlyNotified(task.user_id, 'reminder_not_started', task.id, '4 hours')) continue;
+      await emitAlert({
+        userId: task.user_id,
+        task,
+        kind: 'not_started',
+        userSlack: task,
+        frontendUrl: resolveAppBase(task.app_base_url),
+        timeZone: task.timezone
+      });
+      console.log(`⚡ Not-started urgent: ${task.title}`);
+    }
+
+    // Open tasks missing a due date (nudge so AI scaffolding can schedule them)
+    const missingDue = await pool.query(
+      `SELECT t.*, p.user_id, p.title as project_title,
+              u.slack_bot_token, u.slack_user_id, u.slack_webhook_url, u.app_base_url, u.timezone
+       FROM tasks t
+       JOIN projects p ON t.project_id = p.id
+       JOIN users u ON p.user_id = u.id
+       WHERE t.status != 'done'
+         AND t.due_at IS NULL
+         AND (u.slack_bot_token IS NOT NULL OR u.slack_webhook_url IS NOT NULL)`
+    );
+
+    for (const task of missingDue.rows) {
+      if (await recentlyNotified(task.user_id, 'reminder_missing_due', task.id, '24 hours')) continue;
+      await emitAlert({
+        userId: task.user_id,
+        task,
+        kind: 'missing_due',
+        userSlack: task,
+        frontendUrl: resolveAppBase(task.app_base_url),
+        timeZone: task.timezone
+      });
+      console.log(`📅 Missing due date: ${task.title}`);
+    }
+  } catch (error) {
+    console.error('Status alert error:', error);
+  }
+}, { connection: redisConnection() });
+
+statusAlertWorker.on('failed', (job, err) => console.error('Status alert job failed:', err));
+
+// --- Morning digest (~9am local) ---
+
+const digestQueue = new Queue('morning-digest', { connection: redisConnection() });
+digestQueue.add('daily-digest', {}, {
+  repeat: { every: 15 * 60 * 1000 }
+}).catch((err) => console.error('Failed to schedule morning digest:', err));
+
+const digestWorker = new Worker('morning-digest', async () => {
+  console.log('☀️ Checking morning digests...');
+
+  try {
+    const users = await pool.query(
+      `SELECT id, slack_bot_token, slack_user_id, slack_webhook_url, app_base_url, timezone FROM users
+       WHERE slack_bot_token IS NOT NULL OR slack_webhook_url IS NOT NULL`
+    );
+
+    for (const user of users.rows) {
+      const tz = user.timezone || 'Europe/London';
+      // Fire in the 9:00–9:14 window in the user's timezone
+      if (getHourInTimezone(tz) !== 9) continue;
+
+      if (await recentlyNotified(user.id, 'morning_digest', null, '20 hours')) continue;
+      const frontendUrl = resolveAppBase(user.app_base_url);
+
+      const tasks = await pool.query(
+        `SELECT t.*
+         FROM tasks t
+         JOIN projects p ON t.project_id = p.id
+         WHERE p.user_id = $1 AND t.status != 'done'
+           AND (
+             (t.due_at IS NOT NULL AND t.due_at < NOW())
+             OR (t.due_at IS NOT NULL AND t.due_at::date = CURRENT_DATE)
+             OR (t.due_at IS NOT NULL AND t.due_at - (COALESCE(t.est_minutes, 30) + 30) * INTERVAL '1 minute' <= (CURRENT_DATE + INTERVAL '1 day'))
+           )
+         ORDER BY t.due_at ASC NULLS LAST
+         LIMIT 20`,
+        [user.id]
+      );
+
+      if (tasks.rows.length === 0) continue;
+
+      const overdue = [];
+      const dueToday = [];
+      const startToday = [];
+      const now = new Date();
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+
+      for (const t of tasks.rows) {
+        if (!t.due_at) continue;
+        const due = new Date(t.due_at);
+        const startBy = new Date(due.getTime() - ((t.est_minutes || 30) + 30) * 60000);
+        if (due < now) overdue.push(t);
+        else if (due <= todayEnd) dueToday.push(t);
+        else if (startBy <= todayEnd) startToday.push(t);
+      }
+
+      if (!overdue.length && !dueToday.length && !startToday.length) continue;
+
+      const lines = ['☀️ *MindSprint — Today*'];
+      if (overdue.length) {
+        lines.push(`🔴 *Overdue (${overdue.length})*`);
+        overdue.slice(0, 5).forEach((t) => lines.push(`• ${t.title}`));
+      }
+      if (dueToday.length) {
+        lines.push(`🟠 *Due today (${dueToday.length})*`);
+        dueToday.slice(0, 5).forEach((t) => {
+          lines.push(`• ${t.title} (${new Date(t.due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`);
+        });
+      }
+      if (startToday.length) {
+        lines.push(`🟡 *Start today (${startToday.length})*`);
+        startToday.slice(0, 5).forEach((t) => lines.push(`• ${t.title}`));
+      }
+      lines.push(`<${frontendUrl}/dashboard|Open Today plan>`);
+
+      const text = lines.join('\n');
+      await pool.query(
+        `INSERT INTO notifications (user_id, type, title, body)
+         VALUES ($1, 'morning_digest', 'Morning plan', $2)`,
+        [user.id, text.replace(/\*/g, '').slice(0, 500)]
+      );
+      await sendSlackDM(user, text);
+      console.log(`☀️ Morning digest sent to user ${user.id}`);
+    }
+  } catch (error) {
+    console.error('Morning digest error:', error);
+  }
+}, { connection: redisConnection() });
+
+digestWorker.on('failed', (job, err) => console.error('Digest job failed:', err));
 
 // --- Schedule-check worker: warns when tasks can't fit before deadline ---
 
@@ -618,6 +993,8 @@ process.on('SIGTERM', async () => {
   await worker.close();
   await recurringWorker.close();
   await reminderWorker.close();
+  await statusAlertWorker.close();
+  await digestWorker.close();
   await scheduleCheckWorker.close();
   await pool.end();
   process.exit(0);

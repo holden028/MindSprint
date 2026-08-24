@@ -45,10 +45,58 @@ const aiLimiter = rateLimit({
   legacyHeaders: false
 });
 
-app.use(helmet());
+app.use(helmet({
+  // Allow the SPA to be framed/opened from LAN IPs without CSP blocking API calls
+  crossOriginResourcePolicy: { policy: 'cross-origin' }
+}));
 app.use(morgan('combined'));
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true; // curl / same-origin / mobile webviews
+
+  const defaults = [
+    process.env.FRONTEND_URL,
+    'http://localhost:5174',
+    'http://127.0.0.1:5174',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000'
+  ].filter(Boolean);
+
+  if (defaults.includes(origin)) return true;
+
+  // Extra origins: CORS_ORIGINS=http://192.168.1.10:5174,https://app.example.com
+  const extra = (process.env.CORS_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (extra.includes(origin)) return true;
+
+  try {
+    const { hostname, protocol } = new URL(origin);
+    if (protocol !== 'http:' && protocol !== 'https:') return false;
+    // Private LAN / localhost — needed when opening the UI via machine IP
+    if (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(hostname)
+    ) {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
+}
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5174',
+  origin(origin, callback) {
+    if (isAllowedOrigin(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS blocked: ${origin}`));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']

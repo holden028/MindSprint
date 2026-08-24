@@ -1,6 +1,31 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+/**
+ * Resolve API base URL for localhost and LAN IP access.
+ * If the page is opened via http://192.168.x.x:5174 but VITE_API_URL
+ * points at localhost, rewrite to the same host on the API port.
+ */
+function resolveApiUrl() {
+  const configured = (import.meta.env.VITE_API_URL || 'http://localhost:8080').replace(/\/+$/, '');
+  if (typeof window === 'undefined') return configured;
+
+  try {
+    const api = new URL(configured);
+    const pageHost = window.location.hostname;
+    const isLocalApi = api.hostname === 'localhost' || api.hostname === '127.0.0.1';
+    const isRemotePage = pageHost !== 'localhost' && pageHost !== '127.0.0.1';
+
+    if (isLocalApi && isRemotePage) {
+      api.hostname = pageHost;
+      return api.origin;
+    }
+    return api.origin;
+  } catch {
+    return configured;
+  }
+}
+
+const API_URL = resolveApiUrl();
 
 const api = axios.create({
   baseURL: API_URL,
@@ -41,4 +66,3 @@ api.interceptors.response.use(
 );
 
 export default api;
-

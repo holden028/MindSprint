@@ -1,13 +1,25 @@
 const express = require('express');
 const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
+const { refreshAllAutoReminders } = require('../services/reminders');
 
 const router = express.Router();
+
+router.post('/refresh-ladders', authenticateToken, async (req, res) => {
+  try {
+    const { user_id } = req.user;
+    const refreshed = await refreshAllAutoReminders(user_id);
+    res.json({ refreshed, message: `Rebuilt reminder ladders for ${refreshed} task(s)` });
+  } catch (error) {
+    console.error('Refresh ladders error:', error);
+    res.status(500).json({ error: 'Failed to refresh reminder ladders' });
+  }
+});
 
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const { user_id } = req.user;
-    const { task_id, remind_at, channel = 'in_app' } = req.body;
+    const { task_id, remind_at, channel = 'in_app', kind = 'custom' } = req.body;
 
     if (!task_id || !remind_at) {
       return res.status(400).json({ error: 'task_id and remind_at are required' });
@@ -29,10 +41,10 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 
     const result = await query(
-      `INSERT INTO reminders (task_id, user_id, remind_at, channel)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO reminders (task_id, user_id, remind_at, channel, kind)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
-      [task_id, user_id, remind_at, channel]
+      [task_id, user_id, remind_at, channel, kind || 'custom']
     );
 
     res.status(201).json({ reminder: result.rows[0] });

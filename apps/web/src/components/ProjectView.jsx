@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import LoadingSpinner from './LoadingSpinner';
 import ManualTaskModal from './ManualTaskModal';
@@ -9,6 +9,8 @@ import { getPriorityColor } from '../utils/colors';
 export default function ProjectView() {
   const { projectId } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const highlightTaskId = searchParams.get('task');
   const [project, setProject] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -174,6 +176,7 @@ export default function ProjectView() {
                         onDelete={handleDeleteTask} 
                         onStartSession={handleStartSession}
                         getPriorityColor={getPriorityColor}
+                        highlighted={highlightTaskId === task.id}
                       />
                     ))}
                   </div>
@@ -192,6 +195,7 @@ export default function ProjectView() {
                         onDelete={handleDeleteTask} 
                         onStartSession={handleStartSession}
                         getPriorityColor={getPriorityColor}
+                        highlighted={highlightTaskId === task.id}
                       />
                     ))}
                   </div>
@@ -211,6 +215,7 @@ export default function ProjectView() {
                         onStartSession={handleStartSession}
                         getPriorityColor={getPriorityColor}
                         completed={true}
+                        highlighted={highlightTaskId === task.id}
                       />
                     ))}
                   </div>
@@ -231,9 +236,21 @@ export default function ProjectView() {
   );
 }
 
-function TaskCard({ task, onDelete, onStartSession, getPriorityColor, completed }) {
+function TaskCard({ task, onDelete, onStartSession, getPriorityColor, completed, highlighted }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (highlighted && ref.current) {
+      ref.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [highlighted]);
+
   return (
-    <div className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-lg p-4 hover:bg-white/15 transition-all group">
+    <div
+      ref={ref}
+      className={`backdrop-blur-sm bg-white/10 border rounded-lg p-4 hover:bg-white/15 transition-all group ${
+        highlighted ? 'border-cyan-400/70 ring-2 ring-cyan-400/40' : 'border-white/20'
+      }`}
+    >
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <div className="flex items-start gap-3 mb-2">

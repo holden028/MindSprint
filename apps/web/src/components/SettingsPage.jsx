@@ -1,21 +1,86 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Hash, CheckCircle, AlertCircle, ChevronDown, ChevronUp, ExternalLink, Copy, Clock, Plus, Trash2, Calendar } from 'lucide-react';
+import { Settings, Hash, CheckCircle, AlertCircle, ChevronDown, ChevronUp, ExternalLink, Copy, Clock, Plus, Trash2, Calendar, Link2, RefreshCw, Globe, KeyRound } from 'lucide-react';
 import api from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 
 const DAY_OPTIONS = [
   { key: 'mon', label: 'Mon' }, { key: 'tue', label: 'Tue' }, { key: 'wed', label: 'Wed' },
   { key: 'thu', label: 'Thu' }, { key: 'fri', label: 'Fri' }, { key: 'sat', label: 'Sat' }, { key: 'sun', label: 'Sun' }
 ];
 
+const COMMON_TIMEZONES = [
+  'Europe/London',
+  'Europe/Dublin',
+  'Europe/Paris',
+  'Europe/Berlin',
+  'Europe/Amsterdam',
+  'Europe/Madrid',
+  'Europe/Rome',
+  'Europe/Warsaw',
+  'Europe/Athens',
+  'Europe/Moscow',
+  'Atlantic/Reykjavik',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Toronto',
+  'America/Sao_Paulo',
+  'Asia/Dubai',
+  'Asia/Kolkata',
+  'Asia/Singapore',
+  'Asia/Hong_Kong',
+  'Asia/Tokyo',
+  'Asia/Shanghai',
+  'Australia/Sydney',
+  'Australia/Melbourne',
+  'Pacific/Auckland',
+  'UTC'
+];
+
+function listTimezones() {
+  try {
+    if (typeof Intl !== 'undefined' && typeof Intl.supportedValuesOf === 'function') {
+      return Intl.supportedValuesOf('timeZone');
+    }
+  } catch { /* ignore */ }
+  return COMMON_TIMEZONES;
+}
+
+function formatTzPreview(tz) {
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz,
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+      timeZoneName: 'short'
+    }).format(new Date());
+  } catch {
+    return '';
+  }
+}
+
 export default function SettingsPage() {
   const [webhookUrl, setWebhookUrl] = useState('');
   const [slackUserId, setSlackUserId] = useState('');
   const [botToken, setBotToken] = useState('');
+  const [appBaseUrl, setAppBaseUrl] = useState('');
+  const [timezone, setTimezone] = useState('Europe/London');
+  const [timezones] = useState(() => listTimezones());
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [status, setStatus] = useState(null);
   const [showGuide, setShowGuide] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [passwordStatus, setPasswordStatus] = useState(null);
+  const { user } = useAuth();
 
   // Schedule state
   const [timeBlocks, setTimeBlocks] = useState([]);
@@ -33,6 +98,15 @@ export default function SettingsPage() {
       if (data.slack_webhook_url) setWebhookUrl(data.slack_webhook_url);
       if (data.slack_user_id) setSlackUserId(data.slack_user_id);
       if (data.slack_bot_token) setBotToken(data.slack_bot_token);
+      if (data.app_base_url) setAppBaseUrl(data.app_base_url);
+      if (data.timezone) setTimezone(data.timezone);
+      else {
+        try {
+          setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/London');
+        } catch {
+          setTimezone('Europe/London');
+        }
+      }
     } catch {
       // settings may not exist yet
     } finally {
@@ -94,13 +168,28 @@ export default function SettingsPage() {
       await api.put('/profile', {
         slack_webhook_url: webhookUrl || null,
         slack_user_id: slackUserId || null,
-        slack_bot_token: botToken || null
+        slack_bot_token: botToken || null,
+        app_base_url: appBaseUrl || null,
+        timezone: timezone || 'Europe/London',
       });
       setStatus({ type: 'success', msg: 'Settings saved!' });
     } catch (err) {
       setStatus({ type: 'error', msg: err.response?.data?.error || 'Failed to save settings' });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleRefreshLadders = async () => {
+    setRefreshing(true);
+    setStatus(null);
+    try {
+      const { data } = await api.post('/reminders/refresh-ladders');
+      setStatus({ type: 'success', msg: data.message || `Refreshed ${data.refreshed} task(s)` });
+    } catch (err) {
+      setStatus({ type: 'error', msg: err.response?.data?.error || 'Failed to refresh reminders' });
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -117,9 +206,39 @@ export default function SettingsPage() {
     }
   };
 
-  const apiBase = window.location.hostname === 'localhost'
-    ? 'http://localhost:8080'
-    : `${window.location.origin}/api`;
+  const handleChangePassword = async () => {
+    setPasswordStatus(null);
+    if (!newPassword) {
+      setPasswordStatus({ type: 'error', msg: 'Enter a new password' });
+      return;
+    }
+    if (newPassword.length < 6) {
+      setPasswordStatus({ type: 'error', msg: 'Password must be at least 6 characters' });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordStatus({ type: 'error', msg: 'Passwords do not match' });
+      return;
+    }
+
+    setChangingPassword(true);
+    try {
+      await api.post('/auth/change-password', { newPassword });
+      setNewPassword('');
+      setConfirmPassword('');
+      setPasswordStatus({ type: 'success', msg: 'Password updated successfully' });
+    } catch (err) {
+      setPasswordStatus({ type: 'error', msg: err.response?.data?.error || 'Failed to change password' });
+    } finally {
+      setChangingPassword(false);
+    }
+  };
+
+    const apiBase = (() => {
+      const host = window.location.hostname;
+      if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:8080';
+      return `${window.location.protocol}//${host}:8080`;
+    })();
 
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
@@ -134,6 +253,52 @@ export default function SettingsPage() {
       <div className="flex items-center gap-3 mb-2">
         <Settings className="text-white" size={28} />
         <h2 className="text-3xl font-bold text-white">Settings</h2>
+      </div>
+
+      {/* Change password — own account only */}
+      <div className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl p-6">
+        <h3 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
+          <KeyRound size={20} className="text-amber-400" />
+          Password
+        </h3>
+        <p className="text-sm text-white/50 mb-4">
+          Set a new password for your account{user?.email ? ` (${user.email})` : ''}.
+        </p>
+        <label className="block text-sm font-medium text-white/70 mb-1.5">New password</label>
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          className="w-full backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-amber-500/50 mb-3 text-sm"
+          placeholder="At least 6 characters"
+        />
+        <label className="block text-sm font-medium text-white/70 mb-1.5">Confirm password</label>
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          className="w-full backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-amber-500/50 mb-4 text-sm"
+          placeholder="Repeat new password"
+        />
+        <button
+          onClick={handleChangePassword}
+          disabled={changingPassword}
+          className="bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 disabled:opacity-50 text-white px-6 py-2.5 rounded-xl transition-all text-sm font-medium"
+        >
+          {changingPassword ? 'Updating…' : 'Set password'}
+        </button>
+        {passwordStatus && (
+          <div className={`mt-4 flex items-center gap-2 text-sm px-4 py-3 rounded-xl border ${
+            passwordStatus.type === 'success'
+              ? 'bg-green-500/10 border-green-400/30 text-green-300'
+              : 'bg-red-500/10 border-red-400/30 text-red-300'
+          }`}>
+            {passwordStatus.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
+            {passwordStatus.msg}
+          </div>
+        )}
       </div>
 
       {/* Schedule / Time Blocks */}
@@ -214,6 +379,95 @@ export default function SettingsPage() {
           <button onClick={() => setShowAddBlock(true)} className="flex items-center gap-2 text-blue-300 hover:text-blue-200 text-sm font-medium">
             <Plus size={16} /> Add Time Block
           </button>
+        )}
+      </div>
+
+      {/* Timezone */}
+      <div className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl p-6">
+        <h3 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
+          <Globe size={20} className="text-emerald-400" />
+          Timezone
+        </h3>
+        <p className="text-sm text-white/50 mb-4">
+          Used for AI clock answers, morning digest (~9am), and quiet hours (22:00–07:00).
+        </p>
+        <label className="block text-sm font-medium text-white/70 mb-1.5">Your timezone</label>
+        <select
+          value={timezone}
+          onChange={(e) => setTimezone(e.target.value)}
+          className="w-full backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50 mb-2 text-sm"
+        >
+          {!timezones.includes(timezone) && (
+            <option value={timezone}>{timezone}</option>
+          )}
+          {timezones.map((tz) => (
+            <option key={tz} value={tz} className="bg-slate-900 text-white">
+              {tz}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-white/40 mb-3">
+          Local time now: {formatTzPreview(timezone) || '—'}
+        </p>
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 disabled:opacity-50 text-white px-6 py-2.5 rounded-xl transition-all text-sm font-medium"
+        >
+          {saving ? 'Saving...' : 'Save timezone'}
+        </button>
+      </div>
+
+      {/* App URL for Slack deep links */}
+      <div className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl p-6">
+        <h3 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
+          <Link2 size={20} className="text-cyan-400" />
+          App URL (for Slack links)
+        </h3>
+        <p className="text-sm text-white/50 mb-4">
+          Domain or IP where MindSprint is reachable. Slack messages append paths like{' '}
+          <code className="text-white/60">/projects/…?task=…</code>. Accepts IPs and hostnames
+          (with or without <code className="text-white/60">http://</code>).
+        </p>
+        <label className="block text-sm font-medium text-white/70 mb-1.5">Public base URL</label>
+        <input
+          type="text"
+          value={appBaseUrl}
+          onChange={(e) => setAppBaseUrl(e.target.value)}
+          placeholder="192.168.1.10:5174 or mindsprint.example.com or https://…"
+          className="w-full backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 mb-3 text-sm"
+        />
+        {appBaseUrl.trim() && (
+          <p className="text-xs text-white/40 mb-3">
+            Example link: {appBaseUrl.replace(/\/+$/, '')}/projects/&lt;id&gt;?task=&lt;id&gt;
+          </p>
+        )}
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 disabled:opacity-50 text-white px-6 py-2.5 rounded-xl transition-all text-sm font-medium"
+          >
+            {saving ? 'Saving...' : 'Save URL'}
+          </button>
+          <button
+            onClick={handleRefreshLadders}
+            disabled={refreshing}
+            className="backdrop-blur-sm bg-white/10 border border-white/20 text-white px-6 py-2.5 rounded-xl hover:bg-white/20 transition-all text-sm font-medium disabled:opacity-50 inline-flex items-center gap-2"
+          >
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+            {refreshing ? 'Refreshing…' : 'Refresh reminder ladders'}
+          </button>
+        </div>
+        {status && (
+          <div className={`mt-4 flex items-center gap-2 text-sm px-4 py-3 rounded-xl border ${
+            status.type === 'success'
+              ? 'bg-green-500/10 border-green-400/30 text-green-300'
+              : 'bg-red-500/10 border-red-400/30 text-red-300'
+          }`}>
+            {status.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
+            {status.msg}
+          </div>
         )}
       </div>
 

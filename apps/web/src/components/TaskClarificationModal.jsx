@@ -101,7 +101,7 @@ export default function TaskClarificationModal({ taskData, onConfirm, onRefine, 
 
   if (loading) {
     return (
-      <Modal className="max-w-lg p-8">
+      <Modal className="max-w-lg" onClose={onClose}>
         <div className="flex flex-col items-center gap-4 py-8">
           <div className="relative">
             <Brain className="h-10 w-10 text-purple-400 animate-pulse" />
@@ -116,7 +116,7 @@ export default function TaskClarificationModal({ taskData, onConfirm, onRefine, 
 
   if (refining) {
     return (
-      <Modal className="max-w-lg p-8">
+      <Modal className="max-w-lg" onClose={onClose}>
         <div className="flex flex-col items-center gap-4 py-8">
           <div className="animate-spin rounded-full h-8 w-8 border-2 border-purple-400 border-t-transparent" />
           <span className="text-white/80">Refining your task...</span>
@@ -136,7 +136,7 @@ export default function TaskClarificationModal({ taskData, onConfirm, onRefine, 
     );
 
     return (
-      <Modal className="max-w-lg p-8">
+      <Modal className="max-w-lg" onClose={onClose}>
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
             <CheckCircle className="text-green-400" size={22} />
@@ -201,7 +201,7 @@ export default function TaskClarificationModal({ taskData, onConfirm, onRefine, 
   const q = questions[currentQ];
 
   return (
-    <Modal className="max-w-lg p-8">
+    <Modal className="max-w-lg" onClose={onClose}>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-xl font-bold text-white flex items-center gap-2">
           <Brain className="text-purple-400" size={22} />

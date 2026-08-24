@@ -127,7 +127,7 @@ export default function TemplateEditorModal({ template, type, onSave, onClose })
   const inputClass = 'w-full backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-blue-500/50';
 
   return (
-    <Modal className="max-w-2xl p-8">
+    <Modal className="max-w-2xl" onClose={onClose}>
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold text-white">
           {isEdit ? 'Edit' : 'New'} {isProject ? 'Project' : 'Task'} Template

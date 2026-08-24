@@ -103,7 +103,7 @@ export default function TaskBreakdown({ onComplete, onClose }) {
   };
 
   return (
-    <Modal className="max-w-2xl p-6">
+    <Modal className="max-w-2xl" onClose={onClose}>
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold text-white">AI Task Breakdown</h2>
           <button

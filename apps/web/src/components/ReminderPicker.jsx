@@ -43,6 +43,7 @@ export default function ReminderPicker({ taskId, onSet, onClose }) {
             task_id: taskId,
             remind_at: remindAt.toISOString(),
             channel,
+            kind: 'custom',
           })
         )
       );

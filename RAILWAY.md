@@ -40,6 +40,7 @@ AI_MODEL=openai/gpt-oss-120b
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 REDIS_URL=${{Redis.REDIS_URL}}
 FRONTEND_URL=https://<your-web-service>.up.railway.app
+TZ=Europe/London
 ```
 
 5. **Networking** → **Generate Domain** (e.g. `mindsprint-api.up.railway.app`)
