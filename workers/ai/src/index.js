@@ -341,6 +341,7 @@ function computeNextOccurrence(rule, fromDate = new Date()) {
 
 const recurringQueue = new Queue('recurring-tasks', { connection: redisConnection() });
 const reminderQueue = new Queue('reminders', { connection: redisConnection() });
+const { buildTaskActionBlocks } = require('./slackBlocks');
 
 recurringQueue.add('process-recurring', {}, {
   repeat: { every: 5 * 60 * 1000 }
@@ -427,9 +428,8 @@ const reminderWorker = new Worker('reminders', async () => {
         const recent = await pool.query(
           `SELECT id FROM notifications
            WHERE user_id = $1 AND task_id = $2
-             AND type LIKE 'reminder_%'
-             AND type <> $3
-             AND created_at > NOW() - INTERVAL '20 minutes'
+             AND type = $3
+             AND created_at > NOW() - INTERVAL '8 minutes'
            LIMIT 1`,
           [reminder.user_id, reminder.task_id, copy.notifType]
         );
@@ -438,7 +438,7 @@ const reminderWorker = new Worker('reminders', async () => {
           continue;
         }
 
-        await sendSlackDM(reminder, copy.slackText);
+        await sendSlackDM(reminder, copy.slackText, copy.blocks);
       }
 
       await pool.query('UPDATE reminders SET sent = true WHERE id = $1', [reminder.id]);
@@ -492,72 +492,105 @@ function buildReminderCopy(kind, reminder, frontendUrl) {
   const due = formatDue(reminder.due_at);
   const est = reminder.est_minutes || 30;
   const link = taskLink(frontendUrl, reminder.project_id, reminder.task_id);
-  const open = `<${link}|Open task> · <${frontendUrl.replace(/\/+$/, '')}/dashboard|Today>`;
+  const dash = `${frontendUrl.replace(/\/+$/, '')}/dashboard`;
+  const open = `<${link}|Open task> · <${dash}|Today>`;
+  const nag = {
+    day_before: {
+      notifType: 'reminder_day_before',
+      title: `Tomorrow: ${title}`,
+      body: due ? `Due ${due} · ~${est} min — don't leave this to chance` : `On tomorrow's list`,
+      slackText: `📣 *This is still hanging over you tomorrow:* ${title}\n${due ? `Due ${due} · ` : ''}~${est} min. Deal with it before it becomes a crisis.\n${open}`
+    },
+    morning: {
+      notifType: 'reminder_morning',
+      title: `Today: ${title}`,
+      body: due ? `Due ${due} · ~${est} min` : `On today's list · ~${est} min`,
+      slackText: `☀️ *Still on you today:* ${title}\n${due ? `Due ${due} · ` : ''}~${est} min. I'm going to keep asking until it's done.\n${open}`
+    },
+    start_by: {
+      notifType: 'reminder_start_by',
+      title: `Start now: ${title}`,
+      body: due ? `Leave buffer before deadline (${due}) · ~${est} min` : `Time to start · ~${est} min`,
+      slackText: `🟡 *You should have started:* ${title}\n${due ? `Due ${due} · ` : ''}~${est} min. Buffer is gone if you wait.\n${open}`
+    },
+    two_hours: {
+      notifType: 'reminder_two_hours',
+      title: `2 hours left: ${title}`,
+      body: `About two hours until ${due || 'the deadline'}`,
+      slackText: `⏰ *Two hours.* ${title} is still open.\nNo, looking at this message does not count as doing it.\n${open}`
+    },
+    hour_before: {
+      notifType: 'reminder_hour_before',
+      title: `1 hour left: ${title}`,
+      body: `About an hour until ${due || 'the deadline'}`,
+      slackText: `⏰ *One hour.* ${title}\nThis is the part where you stop negotiating with yourself.\n${open}`
+    },
+    half_hour: {
+      notifType: 'reminder_half_hour',
+      title: `30 min left: ${title}`,
+      body: `Half an hour until ${due || 'the deadline'}`,
+      slackText: `🟠 *30 minutes.* ${title} is still sitting there.\n${open}`
+    },
+    due_soon: {
+      notifType: 'reminder_due_soon',
+      title: `Due soon: ${title}`,
+      body: `Deadline in ~15 minutes${due ? ` (${due})` : ''}`,
+      slackText: `🟠 *15 minutes.* ${title}\nStart a focus session or move the deadline — but don't ghost it.\n${open}`
+    },
+    five_min: {
+      notifType: 'reminder_five_min',
+      title: `5 min left: ${title}`,
+      body: `Deadline in ~5 minutes`,
+      slackText: `🔴 *Five minutes.* ${title}\nLast call before I call it overdue and get louder.\n${open}`
+    },
+    deadline: {
+      notifType: 'reminder_deadline',
+      title: `Deadline now: ${title}`,
+      body: `This was due ${due || 'now'} and is still open`,
+      slackText: `🔴 *That was the deadline.* ${title}\nWas due ${due || 'now'} and you still haven't finished. I'm not dropping this.\n${open}`
+    },
+    overdue: {
+      notifType: 'reminder_overdue',
+      title: `Overdue: ${title}`,
+      body: `Still open past ${due || 'the deadline'}`,
+      slackText: `😤 *Still not done:* ${title}\nPast ${due || 'the deadline'}. I'll keep pinging until it's Done, snoozed, or you actually start it.\n${open}`
+    },
+    not_started: {
+      notifType: 'reminder_not_started',
+      title: `Urgent & not started: ${title}`,
+      body: `P${reminder.priority}/U${reminder.urgency}${due ? ` · due ${due}` : ''} · no focus session yet`,
+      slackText: `⚡ *Urgent and you haven't even started:* ${title}\nP${reminder.priority}/U${reminder.urgency}${due ? ` · due ${due}` : ''} · 0 focus time today.\n${open}`
+    },
+    missing_due: {
+      notifType: 'reminder_missing_due',
+      title: `No due date: ${title}`,
+      body: reminder.project_title
+        ? `"${title}" in ${reminder.project_title} has no due date`
+        : `"${title}" has no due date`,
+      slackText: `📅 *No deadline, so it will slip:* ${title}\n${reminder.project_title ? `_Project: ${reminder.project_title}_\n` : ''}Put a due date on it or I'll keep asking.\n${open}`
+    },
+    custom: {
+      notifType: 'reminder_custom',
+      title: `Reminder: ${title}`,
+      body: `Your reminder for "${title}" is due.`,
+      slackText: `🔔 *Hey. This is still a thing:* ${title}\n${open}`
+    }
+  };
 
-  switch (kind) {
-    case 'morning':
-      return {
-        notifType: 'reminder_morning',
-        title: `Today: ${title}`,
-        body: due ? `Due ${due} · ~${est} min` : `On today's list · ~${est} min`,
-        slackText: `☀️ *Today:* ${title}\n${due ? `Due ${due} · ` : ''}~${est} min\n${open}`
-      };
-    case 'start_by':
-      return {
-        notifType: 'reminder_start_by',
-        title: `Start now: ${title}`,
-        body: due ? `Leave buffer before deadline (${due}) · ~${est} min` : `Time to start · ~${est} min`,
-        slackText: `🟡 *Start now:* ${title}\n${due ? `Due ${due} · ` : ''}~${est} min — leave buffer before the deadline\n${open}`
-      };
-    case 'due_soon':
-      return {
-        notifType: 'reminder_due_soon',
-        title: `Due soon: ${title}`,
-        body: `Deadline in ~15 minutes${due ? ` (${due})` : ''}`,
-        slackText: `🟠 *Due in 15 min:* ${title}\nStill open — start a focus session or move the deadline\n${open}`
-      };
-    case 'deadline':
-      return {
-        notifType: 'reminder_deadline',
-        title: `Deadline now: ${title}`,
-        body: `This was due ${due || 'now'} and is still open`,
-        slackText: `🔴 *Deadline:* ${title}\nWas due ${due || 'now'} — still open\n${open}`
-      };
-    case 'overdue':
-      return {
-        notifType: 'reminder_overdue',
-        title: `Overdue: ${title}`,
-        body: `Still open past ${due || 'the deadline'}`,
-        slackText: `🔴 *Overdue:* ${title}\nStill open past ${due || 'the deadline'}\n${open}`
-      };
-    case 'not_started':
-      return {
-        notifType: 'reminder_not_started',
-        title: `Urgent & not started: ${title}`,
-        body: `P${reminder.priority}/U${reminder.urgency}${due ? ` · due ${due}` : ''} · no focus session yet`,
-        slackText: `⚡ *Urgent & not started:* ${title}\nP${reminder.priority}/U${reminder.urgency}${due ? ` · due ${due}` : ''} · 0 focus time logged today\n${open}`
-      };
-    case 'missing_due':
-      return {
-        notifType: 'reminder_missing_due',
-        title: `No due date: ${title}`,
-        body: reminder.project_title
-          ? `"${title}" in ${reminder.project_title} has no due date`
-          : `"${title}" has no due date`,
-        slackText: `📅 *Missing due date:* ${title}\n${reminder.project_title ? `_Project: ${reminder.project_title}_\n` : ''}Add a deadline so MindSprint can remind you.\n${open}`
-      };
-    default:
-      return {
-        notifType: 'reminder_custom',
-        title: `Reminder: ${title}`,
-        body: `Your reminder for "${title}" is due.`,
-        slackText: `🔔 *Reminder:* ${title}\n${open}`
-      };
-  }
+  const copy = nag[kind] || nag.custom;
+  copy.blocks = buildTaskActionBlocks({
+    text: copy.slackText,
+    taskId: reminder.task_id,
+    openUrl: link
+  });
+  return copy;
 }
 
-async function sendSlackDM(userRow, text) {
+async function sendSlackDM(userRow, text, blocks) {
   try {
+    const payload = { text };
+    if (blocks) payload.blocks = blocks;
+
     if (userRow.slack_bot_token && userRow.slack_user_id) {
       await fetch('https://slack.com/api/chat.postMessage', {
         method: 'POST',
@@ -565,14 +598,17 @@ async function sendSlackDM(userRow, text) {
           Authorization: `Bearer ${userRow.slack_bot_token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ channel: userRow.slack_user_id, text })
+        body: JSON.stringify({ channel: userRow.slack_user_id, ...payload })
       });
     } else if (userRow.slack_webhook_url) {
       const mention = userRow.slack_user_id ? `<@${userRow.slack_user_id}> ` : '';
       await fetch(userRow.slack_webhook_url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: `${mention}${text}` })
+        body: JSON.stringify({
+          text: `${mention}${text}`,
+          blocks: blocks || undefined
+        })
       });
     }
   } catch (err) {
@@ -611,7 +647,7 @@ async function emitAlert({ userId, task, kind, userSlack, frontendUrl, timeZone 
   );
 
   if (!isQuietHours(timeZone || 'Europe/London') || kind === 'overdue' || kind === 'missing_due') {
-    await sendSlackDM(userSlack, copy.slackText);
+    await sendSlackDM(userSlack, copy.slackText, copy.blocks);
   }
 }
 
@@ -622,7 +658,7 @@ reminderWorker.on('failed', (job, err) => console.error('Reminder job failed:', 
 
 const statusAlertQueue = new Queue('status-alerts', { connection: redisConnection() });
 statusAlertQueue.add('check-status', {}, {
-  repeat: { every: 5 * 60 * 1000 }
+  repeat: { every: 2 * 60 * 1000 }
 }).catch((err) => console.error('Failed to schedule status alerts:', err));
 
 const statusAlertWorker = new Worker('status-alerts', async () => {
@@ -645,16 +681,18 @@ const statusAlertWorker = new Worker('status-alerts', async () => {
 
     for (const task of overdue.rows) {
       const minsPast = (now - new Date(task.due_at)) / 60000;
-      if (minsPast < 25) continue;
+      if (minsPast < 10) continue;
 
-      const daysPast = minsPast / (60 * 24);
-      let interval = '4 hours';
-      if (daysPast >= 7) interval = '12 hours';
-      else if (minsPast < 90) interval = '90 minutes';
+      let interval = '20 minutes';
+      if (minsPast < 60) interval = '15 minutes';
+      else if (minsPast < 180) interval = '20 minutes';
+      else if (minsPast < 24 * 60) interval = '45 minutes';
+      else if (minsPast < 3 * 24 * 60) interval = '2 hours';
+      else interval = '4 hours';
 
       const alertUserId = task.alert_user_id;
       if (await recentlyNotified(alertUserId, 'reminder_overdue', task.id, interval)) continue;
-      if (await recentlyNotified(alertUserId, 'reminder_deadline', task.id, '25 minutes')) continue;
+      if (await recentlyNotified(alertUserId, 'reminder_deadline', task.id, '10 minutes')) continue;
 
       await emitAlert({
         userId: alertUserId,
@@ -690,7 +728,7 @@ const statusAlertWorker = new Worker('status-alerts', async () => {
 
     for (const task of urgent.rows) {
       const alertUserId = task.alert_user_id || task.user_id;
-      if (await recentlyNotified(alertUserId, 'reminder_not_started', task.id, '4 hours')) continue;
+      if (await recentlyNotified(alertUserId, 'reminder_not_started', task.id, '90 minutes')) continue;
       await emitAlert({
         userId: alertUserId,
         task,
@@ -715,7 +753,7 @@ const statusAlertWorker = new Worker('status-alerts', async () => {
     );
 
     for (const task of missingDue.rows) {
-      if (await recentlyNotified(task.user_id, 'reminder_missing_due', task.id, '24 hours')) continue;
+      if (await recentlyNotified(task.user_id, 'reminder_missing_due', task.id, '8 hours')) continue;
       await emitAlert({
         userId: task.user_id,
         task,

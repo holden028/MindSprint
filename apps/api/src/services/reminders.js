@@ -1,40 +1,67 @@
 const { query } = require('../config/database');
 
+const AUTO_KINDS = [
+  'day_before',
+  'morning',
+  'start_by',
+  'two_hours',
+  'hour_before',
+  'half_hour',
+  'due_soon',
+  'five_min',
+  'deadline'
+];
+
+function roundMinute(date) {
+  const d = new Date(date);
+  d.setSeconds(0, 0);
+  return d;
+}
+
 /**
- * Build the ADHD reminder ladder for a task with a due date.
- * Creates dual-channel (in_app + slack) rows for each step.
+ * Build a persistent ADHD reminder ladder (dual-channel in_app + slack).
  */
 async function createAutoReminders(userId, taskId, dueDate, estMinutes = 30) {
   await query(
     `DELETE FROM reminders
      WHERE task_id = $1 AND user_id = $2
-       AND kind IN ('morning', 'start_by', 'due_soon', 'deadline')
+       AND kind = ANY($3::varchar[])
        AND sent = false`,
-    [taskId, userId]
+    [taskId, userId, AUTO_KINDS]
   );
 
   const now = new Date();
   const due = dueDate instanceof Date ? dueDate : new Date(dueDate);
   const ladder = [];
+  const seen = new Set();
 
-  const startBy = new Date(due.getTime() - (estMinutes + 30) * 60000);
-  if (startBy > now) ladder.push({ at: startBy, kind: 'start_by' });
+  const add = (at, kind) => {
+    if (!(at instanceof Date) || Number.isNaN(at.getTime())) return;
+    if (at <= now) return;
+    const key = roundMinute(at).getTime();
+    if (seen.has(key)) return;
+    seen.add(key);
+    ladder.push({ at: roundMinute(at), kind });
+  };
 
-  const dueSoon = new Date(due.getTime() - 15 * 60000);
-  if (dueSoon > now && dueSoon.getTime() !== startBy.getTime()) {
-    ladder.push({ at: dueSoon, kind: 'due_soon' });
-  }
+  add(new Date(due.getTime() - 24 * 60 * 60000), 'day_before');
 
-  if (due > now) {
-    ladder.push({ at: due, kind: 'deadline' });
-  }
+  const eveBefore = new Date(due);
+  eveBefore.setDate(eveBefore.getDate() - 1);
+  eveBefore.setHours(18, 0, 0, 0);
+  add(eveBefore, 'day_before');
 
   const dueDay9am = new Date(due);
   dueDay9am.setHours(9, 0, 0, 0);
-  const already = new Set(ladder.map((r) => r.at.getTime()));
-  if (dueDay9am > now && !already.has(dueDay9am.getTime()) && dueDay9am.getTime() < due.getTime()) {
-    ladder.push({ at: dueDay9am, kind: 'morning' });
-  }
+  add(dueDay9am, 'morning');
+
+  add(new Date(due.getTime() - (estMinutes + 30) * 60000), 'start_by');
+  add(new Date(due.getTime() - 2 * 60 * 60000), 'two_hours');
+  add(new Date(due.getTime() - 60 * 60000), 'hour_before');
+  add(new Date(due.getTime() - 30 * 60000), 'half_hour');
+  add(new Date(due.getTime() - 15 * 60000), 'due_soon');
+  add(new Date(due.getTime() - 5 * 60000), 'five_min');
+  add(due, 'deadline');
 
   for (const item of ladder) {
     for (const channel of ['in_app', 'slack']) {
@@ -54,18 +81,18 @@ async function clearAutoReminders(taskId, userId = null) {
     await query(
       `DELETE FROM reminders
        WHERE task_id = $1 AND user_id = $2
-         AND kind IN ('morning', 'start_by', 'due_soon', 'deadline')
+         AND kind = ANY($3::varchar[])
          AND sent = false`,
-      [taskId, userId]
+      [taskId, userId, AUTO_KINDS]
     );
     return;
   }
   await query(
     `DELETE FROM reminders
      WHERE task_id = $1
-       AND kind IN ('morning', 'start_by', 'due_soon', 'deadline')
+       AND kind = ANY($2::varchar[])
        AND sent = false`,
-    [taskId]
+    [taskId, AUTO_KINDS]
   );
 }
 
@@ -114,6 +141,7 @@ async function refreshAllAutoReminders(userId = null) {
 }
 
 module.exports = {
+  AUTO_KINDS,
   createAutoReminders,
   refreshAllAutoReminders,
   syncTaskReminders,
