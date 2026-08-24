@@ -1,0 +1,4 @@
+# Monorepo: Nixpacks auto-detects root package-lock.json and runs npm ci.
+# Keep install in sync with workspaces and include build tooling (e.g. Vite).
+[phases.install]
+cmds = ["npm ci --include=dev"]
