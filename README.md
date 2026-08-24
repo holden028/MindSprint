@@ -20,11 +20,10 @@ A Dockerized web platform that helps users with ADHD or executive dysfunction st
 - **Queue**: Redis + BullMQ
 - **Containerization**: Docker + docker-compose
 
-## Deploy on Railway
+## Deploy (cheap / free)
 
-See **[RAILWAY.md](./RAILWAY.md)** for step-by-step deployment (API + Worker + Web + Postgres + Redis).
-
-Quick summary: connect GitHub → add Postgres & Redis → create 3 services (api, worker, web) with **Root Directory left empty** and config files in each app folder.
+- **Oracle Always Free (recommended for $0):** see **[ORACLE.md](./ORACLE.md)** — one VM runs web + api + worker + Postgres + Redis behind free HTTPS (DuckDNS).
+- **Railway:** see **[RAILWAY.md](./RAILWAY.md)** — managed hosting; Hobby is ~$5+/mo (use free Neon/Upstash DBs to stay cheaper).
 
 ## Quick Start (Local Docker)
 
