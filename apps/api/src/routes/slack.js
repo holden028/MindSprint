@@ -1,6 +1,6 @@
 const express = require('express');
 const { query } = require('../config/database');
-const { buildTaskActionBlocks, parseActionId } = require('../utils/slackBlocks');
+const { buildTaskActionBlocks, buildStatusBlocks, parseActionId } = require('../utils/slackBlocks');
 const { requireSlackSignature } = require('../utils/slackVerify');
 const { buildHomeView, buildCreateTaskModal } = require('../utils/slackHome');
 const { runAssistantChat } = require('../services/aiChat');
@@ -826,9 +826,11 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
           event: 'Done'
         }).catch(() => {});
 
+        const doneText = `*Done!* ~~${task.title}~~ — finally. I'll stop nagging about this one.`;
         res.json({
           replace_original: true,
-          text: `*Done!* ~~${task.title}~~ — finally. I'll stop nagging about this one.`
+          text: doneText.replace(/\*/g, '').replace(/~/g, ''),
+          blocks: buildStatusBlocks(doneText)
         });
         publishHome(dbUser).catch(() => {});
         return;
@@ -852,9 +854,11 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
           event: 'Doing'
         }).catch(() => {});
 
+        const doingText = `*On it:* ${task.title}\nGood. Don't wander off — I'll check back if it stalls.`;
         res.json({
           replace_original: true,
-          text: `*On it:* ${task.title}\nGood. Don't wander off — I'll check back if it stalls.`
+          text: doingText.replace(/\*/g, ''),
+          blocks: buildStatusBlocks(doingText)
         });
         publishHome(dbUser).catch(() => {});
         return;
@@ -880,9 +884,11 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
           [taskId, dbUser.id]
         );
 
+        const snoozeText = `*Snoozed* ${task.title} for ${snooze.label}. Don't think you're off the hook.`;
         return res.json({
           replace_original: true,
-          text: `*Snoozed* ${task.title} for ${snooze.label}. Don't think you're off the hook.`
+          text: snoozeText.replace(/\*/g, ''),
+          blocks: buildStatusBlocks(snoozeText)
         });
       }
 

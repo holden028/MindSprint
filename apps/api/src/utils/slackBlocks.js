@@ -1,4 +1,14 @@
-function buildTaskActionBlocks({ text, taskId, openUrl, uniqueIds = false }) {
+/** Confirmation message after Done / Doing / Snooze — text only, no action buttons. */
+function buildStatusBlocks(text) {
+  return [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: text || 'Updated.' }
+    }
+  ];
+}
+
+function buildTaskActionBlocks({ text, taskId, openUrl, uniqueIds = false, includeActions = true }) {
   const section = {
     type: 'section',
     text: { type: 'mrkdwn', text: text || 'MindSprint reminder' }
@@ -10,6 +20,26 @@ function buildTaskActionBlocks({ text, taskId, openUrl, uniqueIds = false }) {
     const short = String(taskId).replace(/-/g, '').slice(0, 12);
     return `${base}__${short}`;
   };
+
+  // Status updates (Done etc.) — optional Open link only, no Done/Doing/Snooze
+  if (!includeActions) {
+    return [
+      section,
+      openUrl
+        ? {
+            type: 'actions',
+            elements: [
+              {
+                type: 'button',
+                text: { type: 'plain_text', text: 'Open' },
+                action_id: aid('open_task'),
+                url: openUrl
+              }
+            ]
+          }
+        : null
+    ].filter(Boolean);
+  }
 
   if (!taskId) {
     return [
@@ -93,4 +123,4 @@ function parseActionId(actionId) {
   return raw;
 }
 
-module.exports = { buildTaskActionBlocks, parseActionId };
+module.exports = { buildTaskActionBlocks, buildStatusBlocks, parseActionId };

@@ -56,13 +56,16 @@ async function postTaskToProjectChannel({ projectId, ownerUserId, text, taskId, 
     const prefix = event ? `*${event}*` : '*Update*';
     const mrkdwn = `${prefix} — ${text}\n_Project: ${project.title}_`;
 
+    // Done updates: no Done/Doing/Snooze buttons (Open only). Other events keep full actions.
+    const isTerminal = event === 'Done';
     const body = {
       channel: project.slack_channel_id,
       text: mrkdwn.replace(/\*/g, ''),
       blocks: buildTaskActionBlocks({
         text: mrkdwn,
         taskId: taskId || null,
-        openUrl
+        openUrl,
+        includeActions: !isTerminal
       })
     };
 
