@@ -278,7 +278,7 @@ router.post('/events', requireSlackSignature, async (req, res) => {
               token: user.slack_bot_token,
               channel: event.channel,
               threadTs: event.ts,
-              text: 'Ask me anything about your tasks — or use `/task add` to create one.'
+              text: 'Ask me anything about your tasks — or use `/sprint add` to create one.'
             });
             return;
           }
@@ -366,7 +366,7 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
             );
             return;
           }
-          return res.json({ response_type: 'ephemeral', text: 'Usage: `/task add Buy groceries` (or `/task add` alone for the form)' });
+          return res.json({ response_type: 'ephemeral', text: 'Usage: `/sprint add Buy groceries` (or `/sprint add` alone for the form)' });
         }
 
         const task = await createTaskForUser(user, { title });
@@ -393,7 +393,7 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
         );
 
         if (tasksResult.rows.length === 0) {
-          return res.json({ response_type: 'ephemeral', text: 'No open tasks. Use `/task add` to create one!' });
+          return res.json({ response_type: 'ephemeral', text: 'No open tasks. Use `/sprint add` to create one!' });
         }
 
         const taskBlocks = tasksResult.rows.flatMap((t, i) =>
@@ -415,7 +415,7 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
 
       case 'done': {
         const taskQuery = parts.slice(1).join(' ');
-        if (!taskQuery) return res.json({ response_type: 'ephemeral', text: 'Usage: `/task done <task title or number from list>`' });
+        if (!taskQuery) return res.json({ response_type: 'ephemeral', text: 'Usage: `/sprint done <task title or number from list>`' });
 
         let task;
         if (/^\d+$/.test(taskQuery)) {
@@ -438,7 +438,7 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
           task = result.rows[0];
         }
 
-        if (!task) return res.json({ response_type: 'ephemeral', text: 'Task not found. Use `/task list` to see your tasks.' });
+        if (!task) return res.json({ response_type: 'ephemeral', text: 'Task not found. Use `/sprint list` to see your tasks.' });
 
         await query(
           `UPDATE tasks SET status = 'done', completed_at = NOW(), updated_at = NOW() WHERE id = $1`,
@@ -464,7 +464,7 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
         if (!question) {
           return res.json({
             response_type: 'ephemeral',
-            text: 'Usage: `/task ask what should I work on next?` — or just DM MindSprint.'
+            text: 'Usage: `/sprint ask what should I work on next?` — or just DM MindSprint.'
           });
         }
         res.json({ response_type: 'ephemeral', text: 'Thinking…' });
@@ -486,7 +486,7 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
             });
             await postSlackDM(user, result.response || 'Done.');
           } catch (err) {
-            console.error('/task ask error:', err);
+            console.error('/sprint ask error:', err);
             await postSlackDM(user, 'Sorry — I could not answer that just now.');
           }
         });
@@ -495,11 +495,11 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
 
       case 'due': {
         const rest = parts.slice(1).join(' ').trim();
-        // /task due <title> <YYYY-MM-DD or natural>
+        // /sprint due <title> <YYYY-MM-DD or natural>
         if (!rest) {
           return res.json({
             response_type: 'ephemeral',
-            text: 'Usage: `/task due <task title> YYYY-MM-DD` or `/task due 1 YYYY-MM-DD` (number from `/task list`)'
+            text: 'Usage: `/sprint due <task title> YYYY-MM-DD` or `/sprint due 1 YYYY-MM-DD` (number from `/sprint list`)'
           });
         }
 
@@ -507,7 +507,7 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
         if (!dueMatch) {
           return res.json({
             response_type: 'ephemeral',
-            text: 'Include a date like `2026-08-26` at the end. Example: `/task due Buy milk 2026-08-26`'
+            text: 'Include a date like `2026-08-26` at the end. Example: `/sprint due Buy milk 2026-08-26`'
           });
         }
         const dueStr = dueMatch[1];
@@ -562,14 +562,14 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
         if (!channelId || channelId.startsWith('D')) {
           return res.json({
             response_type: 'ephemeral',
-            text: 'Run `/task link <project name>` inside a public/private channel (not a DM).'
+            text: 'Run `/sprint link <project name>` inside a public/private channel (not a DM).'
           });
         }
         const projectQuery = parts.slice(1).join(' ').trim();
         if (!projectQuery) {
           return res.json({
             response_type: 'ephemeral',
-            text: 'Usage: `/task link <project name>` — links this channel to that MindSprint project.'
+            text: 'Usage: `/sprint link <project name>` — links this channel to that MindSprint project.'
           });
         }
         const proj = await query(
@@ -593,7 +593,7 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
       case 'help':
       default: {
         if (!action) {
-          // bare /task → open modal
+          // bare /sprint → open modal
           if (triggerId && user.slack_bot_token) {
             res.json({ response_type: 'ephemeral', text: 'Opening create-task form…' });
             openCreateTaskModal(user, triggerId, { channelId }).catch((err) =>
@@ -611,13 +611,13 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
               text: {
                 type: 'mrkdwn',
                 text:
-                  '`/task add [title]` — Create a task (no title opens form)\n' +
-                  '`/task list` — Show your open tasks\n' +
-                  '`/task done <number or title>` — Complete a task\n' +
-                  '`/task ask <question>` — Ask the AI (reply via DM)\n' +
-                  '`/task due <title|#> YYYY-MM-DD` — Set a due date\n' +
-                  '`/task link <project>` — Link this channel to a project\n' +
-                  '`/task help` — Show this help\n' +
+                  '`/sprint add [title]` — Create a task (no title opens form)\n' +
+                  '`/sprint list` — Show your open tasks\n' +
+                  '`/sprint done <number or title>` — Complete a task\n' +
+                  '`/sprint ask <question>` — Ask the AI (reply via DM)\n' +
+                  '`/sprint due <title|#> YYYY-MM-DD` — Set a due date\n' +
+                  '`/sprint link <project>` — Link this channel to a project\n' +
+                  '`/sprint help` — Show this help\n' +
                   '_Or DM MindSprint for a full AI chat._'
               }
             },

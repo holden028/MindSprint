@@ -728,8 +728,8 @@ export default function SettingsPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-white/50">Command:</span>
                   <div className="flex items-center gap-2">
-                    <code className="text-purple-300">/task</code>
-                    <button onClick={() => copyToClipboard('/task')} className="p-1 hover:bg-white/10 rounded"><Copy size={12} className="text-white/40" /></button>
+                    <code className="text-purple-300">/sprint</code>
+                    <button onClick={() => copyToClipboard('/sprint')} className="p-1 hover:bg-white/10 rounded"><Copy size={12} className="text-white/40" /></button>
                   </div>
                 </div>
                 <div className="flex items-center justify-between">
@@ -822,10 +822,10 @@ export default function SettingsPage() {
                 <p>Open the MindSprint Home Tab, DM the bot, or try:</p>
               </div>
               <div className="bg-black/20 rounded-lg p-3 text-sm space-y-1">
-                <p><code className="text-green-300">/task help</code> — see all commands</p>
-                <p><code className="text-green-300">/task add</code> — open create-task form</p>
-                <p><code className="text-green-300">/task ask what should I do next?</code></p>
-                <p><code className="text-green-300">/task link My Project</code> — in a channel</p>
+                <p><code className="text-green-300">/sprint help</code> — see all commands</p>
+                <p><code className="text-green-300">/sprint add</code> — open create-task form</p>
+                <p><code className="text-green-300">/sprint ask what should I do next?</code></p>
+                <p><code className="text-green-300">/sprint link My Project</code> — in a channel</p>
               </div>
             </div>
 

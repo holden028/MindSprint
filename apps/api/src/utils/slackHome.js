@@ -154,7 +154,7 @@ async function buildHomeView(user) {
         const name = p.slack_channel_name ? `#${p.slack_channel_name.replace(/^#/, '')}` : `<#${p.slack_channel_id}>`;
         return `• ${link} → ${name}`;
       }
-      return `• ${link} — _not linked_ (use \`/task link\` in a channel)`;
+      return `• ${link} — _not linked_ (use \`/sprint link\` in a channel)`;
     });
     blocks.push({
       type: 'section',

@@ -200,7 +200,7 @@ export default function ProjectView() {
               </h3>
               <p className="text-white/50 text-xs mb-3">
                 Link a channel for project-scoped @mentions and task create/doing/done/due posts.
-                Or run <code className="text-white/60">/task link {project.title}</code> inside the channel.
+                Or run <code className="text-white/60">/sprint link {project.title}</code> inside the channel.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
                 <input
