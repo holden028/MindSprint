@@ -104,7 +104,8 @@ async function buildHomeView(user) {
       blocks.push(...buildTaskActionBlocks({
         text: `• *${t.title}*  ·  ${t.status}  ·  ${due}  ·  ~${t.est_minutes || 30}m\n_${t.project_title}_`,
         taskId: t.id,
-        openUrl
+        openUrl,
+        uniqueIds: true
       }));
     }
   }
@@ -186,19 +187,19 @@ async function buildHomeView(user) {
       {
         type: 'button',
         text: { type: 'plain_text', text: 'Intensity: Light' },
-        action_id: 'home_set_intensity',
+        action_id: 'home_intensity_light',
         value: 'light'
       },
       {
         type: 'button',
         text: { type: 'plain_text', text: 'Medium' },
-        action_id: 'home_set_intensity',
+        action_id: 'home_intensity_medium',
         value: 'medium'
       },
       {
         type: 'button',
         text: { type: 'plain_text', text: 'Full' },
-        action_id: 'home_set_intensity',
+        action_id: 'home_intensity_full',
         value: 'full'
       }
     ]

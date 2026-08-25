@@ -781,7 +781,7 @@ export default function SettingsPage() {
                 <button onClick={() => copyToClipboard(`${apiBase}/slack/events`)} className="p-1 hover:bg-white/10 rounded"><Copy size={12} className="text-white/40" /></button>
               </div>
               <div className="text-sm text-white/60 space-y-1">
-                <p>Subscribe to bot events: <code className="text-white/70">message.im</code>, <code className="text-white/70">app_mention</code>, <code className="text-white/70">message.channels</code>, <code className="text-white/70">app_home_opened</code>, <code className="text-white/70">channel_created</code>, <code className="text-white/70">group_created</code>.</p>
+                <p>Subscribe to bot events: <code className="text-white/70">message.im</code>, <code className="text-white/70">app_mention</code>, <code className="text-white/70">message.channels</code>, <code className="text-white/70">app_home_opened</code>, <code className="text-white/70">channel_created</code> (public channels only — Slack has no private-channel create event).</p>
                 <p>Under <strong className="text-white/80">App Home</strong>, enable the Home Tab.</p>
                 <p>From <strong className="text-white/80">Basic Information</strong>, copy the <strong className="text-white/80">Signing Secret</strong> into server env as <code className="text-white/70">SLACK_SIGNING_SECRET</code>.</p>
               </div>

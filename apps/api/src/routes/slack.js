@@ -1,6 +1,6 @@
 const express = require('express');
 const { query } = require('../config/database');
-const { buildTaskActionBlocks } = require('../utils/slackBlocks');
+const { buildTaskActionBlocks, parseActionId } = require('../utils/slackBlocks');
 const { requireSlackSignature } = require('../utils/slackVerify');
 const { buildHomeView, buildCreateTaskModal } = require('../utils/slackHome');
 const { runAssistantChat } = require('../services/aiChat');
@@ -88,12 +88,21 @@ function linkPrompt(slackUserId) {
 }
 
 async function publishHome(user) {
-  if (!user?.slack_bot_token || !user?.slack_user_id) return;
-  const view = await buildHomeView(user);
-  await slackApi(user.slack_bot_token, 'views.publish', {
-    user_id: user.slack_user_id,
-    view
-  });
+  if (!user?.slack_bot_token || !user?.slack_user_id) return { ok: false, error: 'missing_slack' };
+  try {
+    const view = await buildHomeView(user);
+    const result = await slackApi(user.slack_bot_token, 'views.publish', {
+      user_id: user.slack_user_id,
+      view
+    });
+    if (!result.ok) {
+      console.error('views.publish failed:', result.error, result.response_metadata?.messages);
+    }
+    return result;
+  } catch (err) {
+    console.error('publishHome error:', err.message);
+    return { ok: false, error: err.message };
+  }
 }
 
 async function openCreateTaskModal(user, triggerId, { channelId = null, projectId = null } = {}) {
@@ -253,19 +262,23 @@ router.post('/events', requireSlackSignature, async (req, res) => {
       try {
         if (event.type === 'app_home_opened') {
           const user = await getUserBySlackUserId(event.user);
-          if (user) await publishHome(user);
+          if (user) {
+            await publishHome(user);
+          } else {
+            console.warn('app_home_opened for unlinked Slack user', event.user);
+          }
           return;
         }
 
-        // New Slack channel → auto-create MindSprint project (for linked users)
-        if (event.type === 'channel_created' || event.type === 'group_created') {
+        // Public channel created → auto project (private channels have no Events API equivalent)
+        if (event.type === 'channel_created') {
           const ch = event.channel || {};
-          const channelId = ch.id || event.channel;
-          const channelName = typeof ch === 'object' ? ch.name : null;
+          const channelId = ch.id;
+          const channelName = ch.name;
           const creator = ch.creator || event.user;
           if (channelId && creator) {
             await ensureProjectForSlackChannel({
-              channelId: typeof channelId === 'string' ? channelId : channelId?.id,
+              channelId,
               channelName,
               creatorSlackUserId: creator
             });

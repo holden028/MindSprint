@@ -185,7 +185,7 @@ In the app: **Settings → App URL** → save `https://yourname.duckdns.org` (fo
 After deploy, configure the Slack app at [api.slack.com/apps](https://api.slack.com/apps):
 
 1. **Event Subscriptions** → Request URL: `https://YOUR_DOMAIN/api/slack/events`  
-   Bot events: `message.im`, `app_mention`, `message.channels`, `app_home_opened`, `channel_created`, `group_created`
+   Bot events: `message.im`, `app_mention`, `message.channels`, `app_home_opened`, `channel_created` (public only; Slack does not offer `group_created`)
 2. **App Home** → enable Home Tab
 3. **Slash Commands** → `/sprint` → `https://YOUR_DOMAIN/api/slack/commands`
 4. **Interactivity** → `https://YOUR_DOMAIN/api/slack/interactions`  
