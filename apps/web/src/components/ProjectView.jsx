@@ -125,6 +125,8 @@ export default function ProjectView() {
   const doingTasks = tasks.filter(t => t.status === 'doing');
   const doneTasks = tasks.filter(t => t.status === 'done');
   const progress = tasks.length > 0 ? (doneTasks.length / tasks.length) * 100 : 0;
+  const canEdit = project.can_edit ?? !project.is_shared;
+  const isOwner = project.is_owner ?? !project.is_shared;
 
   return (
     <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -160,7 +162,7 @@ export default function ProjectView() {
           </div>
 
           <div className="mt-6 flex items-center gap-3">
-            {!project.is_shared && (
+            {isOwner && (
             <button
               onClick={async () => {
                 setSavingTemplate(true);
@@ -189,10 +191,10 @@ export default function ProjectView() {
           </div>
 
           <div className="mt-6">
-            <ShareInvite projectId={project.id} canShare={!project.is_shared} />
+            <ShareInvite projectId={project.id} canShare={isOwner} />
           </div>
 
-          {!project.is_shared && (
+          {isOwner && (
             <div className="mt-6 backdrop-blur-sm bg-white/5 border border-white/10 rounded-xl p-4">
               <h3 className="text-white font-medium text-sm mb-1 flex items-center gap-2">
                 <Hash size={16} className="text-purple-300" />
@@ -241,7 +243,7 @@ export default function ProjectView() {
           )}
 
           <div className="mt-6">
-            <AttachmentsPanel projectId={project.id} canEdit={!project.is_shared} />
+            <AttachmentsPanel projectId={project.id} canEdit={canEdit} />
           </div>
 
           <div className="mt-4">
@@ -258,7 +260,7 @@ export default function ProjectView() {
         <div>
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-2xl font-bold text-white">Tasks</h2>
-            {!project.is_shared && (
+            {canEdit && (
             <button
               onClick={() => setShowAddTask(true)}
               className="flex items-center gap-2 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white px-4 py-2 rounded-xl transition-all text-sm font-medium"

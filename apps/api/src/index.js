@@ -107,7 +107,9 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 function captureSlackRawBody(req, res, buf) {
-  if (req.originalUrl?.startsWith('/slack') && buf?.length) {
+  // Behind Caddy, path may be /slack/... or /api/slack/...
+  const url = `${req.originalUrl || ''}${req.url || ''}`;
+  if (url.includes('/slack') && buf?.length) {
     req.rawBody = buf;
   }
 }
@@ -123,13 +125,52 @@ app.use(express.urlencoded({
 }));
 
 app.get('/health', async (req, res) => {
+  const checks = { db: 'down', redis: 'skip' };
+  let ok = true;
   try {
     await query('SELECT 1');
-    res.json({ status: 'OK', db: 'up', timestamp: new Date().toISOString() });
+    checks.db = 'up';
   } catch (error) {
-    console.error('Health check failed:', error);
-    res.status(503).json({ status: 'error', db: 'down', timestamp: new Date().toISOString() });
+    console.error('Health check DB failed:', error.message);
+    ok = false;
   }
+
+  const redisUrl = process.env.REDIS_URL;
+  if (redisUrl) {
+    try {
+      const net = require('net');
+      const u = new URL(redisUrl);
+      const redisOk = await new Promise((resolve) => {
+        const socket = net.connect(Number(u.port || 6379), u.hostname || '127.0.0.1', () => {
+          socket.write('PING\r\n');
+        });
+        socket.setTimeout(2000);
+        let data = '';
+        socket.on('data', (chunk) => {
+          data += chunk.toString();
+          socket.end();
+          resolve(data.includes('PONG'));
+        });
+        socket.on('error', () => resolve(false));
+        socket.on('timeout', () => {
+          socket.destroy();
+          resolve(false);
+        });
+      });
+      checks.redis = redisOk ? 'up' : 'down';
+      if (!redisOk) ok = false;
+    } catch (error) {
+      checks.redis = 'down';
+      ok = false;
+      console.error('Health check Redis failed:', error.message);
+    }
+  }
+
+  res.status(ok ? 200 : 503).json({
+    status: ok ? 'OK' : 'error',
+    ...checks,
+    timestamp: new Date().toISOString()
+  });
 });
 
 app.use('/auth', authLimiter, authRoutes);

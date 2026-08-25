@@ -1,6 +1,7 @@
 const express = require('express');
 const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
+const { assertTaskAccess } = require('../utils/access');
 const { normalizeAppBaseUrl } = require('../utils/appBaseUrl');
 const { normalizeTimezone } = require('../utils/timezone');
 const {
@@ -9,8 +10,88 @@ const {
   getSuggestions,
   rebuildProfile
 } = require('../services/learning');
+const { evaluateAchievements } = require('../services/achievements');
 
 const router = express.Router();
+
+function mapFeedbackEstimateToAccuracy(estimateAccuracy) {
+  const n = Number(estimateAccuracy);
+  if (!Number.isFinite(n)) return null;
+  if (n <= 2) return 'more';
+  if (n >= 4) return 'less';
+  if (n === 3) return 'accurate';
+  return null;
+}
+
+// Submit task feedback
+router.post('/feedback', authenticateToken, async (req, res) => {
+  try {
+    const { user_id } = req.user;
+    const {
+      task_id,
+      session_id,
+      rating,
+      difficulty,
+      enjoyment,
+      estimate_accuracy,
+      needed_more_time,
+      additional_minutes,
+      feedback_text
+    } = req.body;
+
+    if (!task_id) {
+      return res.status(400).json({ error: 'task_id is required' });
+    }
+
+    const access = await assertTaskAccess(res, task_id, user_id);
+    if (!access) return;
+
+    const result = await query(
+      `INSERT INTO user_feedback (
+         user_id, task_id, session_id, rating, difficulty, enjoyment,
+         estimate_accuracy, needed_more_time, additional_minutes, feedback_text
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING *`,
+      [
+        user_id,
+        task_id,
+        session_id || null,
+        rating ?? null,
+        difficulty ?? null,
+        enjoyment ?? null,
+        estimate_accuracy ?? null,
+        !!needed_more_time,
+        additional_minutes || 0,
+        feedback_text || null
+      ]
+    );
+
+    const actualAccuracy = mapFeedbackEstimateToAccuracy(estimate_accuracy);
+    if (actualAccuracy) {
+      const taskRow = await query(
+        'SELECT est_minutes FROM tasks WHERE id = $1',
+        [task_id]
+      );
+      const estimatedMinutes = taskRow.rows[0]?.est_minutes;
+      if (estimatedMinutes != null) {
+        await query(
+          `INSERT INTO task_estimate_accuracy (task_id, estimated_minutes, actual_accuracy, user_id)
+           VALUES ($1, $2, $3, $4)`,
+          [task_id, estimatedMinutes, actualAccuracy, user_id]
+        );
+      }
+    }
+
+    evaluateAchievements(user_id).catch((err) =>
+      console.error('Achievement evaluation failed:', err.message)
+    );
+
+    res.status(201).json({ feedback: result.rows[0] });
+  } catch (error) {
+    console.error('Submit feedback error:', error);
+    res.status(500).json({ error: 'Failed to submit feedback' });
+  }
+});
 
 // Get user stats
 router.get('/stats', authenticateToken, async (req, res) => {
@@ -178,7 +259,10 @@ router.get('/gamification', authenticateToken, async (req, res) => {
       xpForNextLevel: 100,
       streak: parseInt(streakResult.rows[0]?.streak || 0),
       longestStreak: parseInt(longestStreakResult.rows[0]?.longest_streak || 0),
-      achievements: achievements.rows
+      achievements: achievements.rows.map((row) => ({
+        id: row.achievement_id,
+        unlocked_at: row.unlocked_at
+      }))
     });
   } catch (error) {
     console.error('Get gamification error:', error);
@@ -194,18 +278,68 @@ function clampHour(value, fallback) {
   return Math.min(23, Math.max(0, Math.round(n)));
 }
 
+function secretLast4(value) {
+  const s = String(value || '');
+  if (!s) return null;
+  return s.slice(-4);
+}
+
+/** Only update secrets when a new non-empty value is sent; empty string clears. */
+function shouldUpdateSecret(value) {
+  if (value === undefined || value === null) return false;
+  return true; // '' clears; non-empty replaces
+}
+
+function normalizeSecretValue(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
 // Get user settings
 router.get('/settings', authenticateToken, async (req, res) => {
   try {
     const { user_id } = req.user;
-    const result = await query(
-      `SELECT slack_webhook_url, slack_user_id, slack_bot_token, app_base_url, timezone,
-              slack_enabled, slack_intensity, quiet_hours_start, quiet_hours_end,
-              digest_morning_hour, digest_evening_hour, digests_enabled
-       FROM users WHERE id = $1`,
-      [user_id]
-    );
-    res.json(result.rows[0] || {});
+    const [settingsResult, channelResult] = await Promise.all([
+      query(
+        `SELECT slack_webhook_url, slack_user_id, slack_bot_token, app_base_url, timezone,
+                slack_enabled, slack_intensity, quiet_hours_start, quiet_hours_end,
+                digest_morning_hour, digest_evening_hour, digests_enabled
+         FROM users WHERE id = $1`,
+        [user_id]
+      ),
+      query(
+        `SELECT EXISTS(
+           SELECT 1 FROM projects
+           WHERE user_id = $1
+             AND slack_channel_id IS NOT NULL
+             AND slack_channel_id != ''
+         ) AS linked`,
+        [user_id]
+      )
+    ]);
+
+    const row = settingsResult.rows[0] || {};
+    const webhook = row.slack_webhook_url || '';
+    const token = row.slack_bot_token || '';
+
+    res.json({
+      slack_user_id: row.slack_user_id || null,
+      app_base_url: row.app_base_url || null,
+      timezone: row.timezone || null,
+      slack_enabled: row.slack_enabled,
+      slack_intensity: row.slack_intensity,
+      quiet_hours_start: row.quiet_hours_start,
+      quiet_hours_end: row.quiet_hours_end,
+      digest_morning_hour: row.digest_morning_hour,
+      digest_evening_hour: row.digest_evening_hour,
+      digests_enabled: row.digests_enabled,
+      slack_bot_token_set: Boolean(token),
+      slack_webhook_set: Boolean(webhook),
+      slack_bot_token_last4: secretLast4(token),
+      slack_webhook_last4: secretLast4(webhook),
+      slack_project_channel_linked: Boolean(channelResult.rows[0]?.linked)
+    });
   } catch (error) {
     console.error('Get settings error:', error);
     res.status(500).json({ error: 'Failed to load settings' });
@@ -226,17 +360,17 @@ router.put('/', authenticateToken, async (req, res) => {
     const values = [];
     let idx = 1;
 
-    if (slack_webhook_url !== undefined) {
+    if (shouldUpdateSecret(slack_webhook_url)) {
       fields.push(`slack_webhook_url = $${idx++}`);
-      values.push(slack_webhook_url);
+      values.push(normalizeSecretValue(slack_webhook_url));
     }
     if (slack_user_id !== undefined) {
       fields.push(`slack_user_id = $${idx++}`);
       values.push(slack_user_id);
     }
-    if (slack_bot_token !== undefined) {
+    if (shouldUpdateSecret(slack_bot_token)) {
       fields.push(`slack_bot_token = $${idx++}`);
-      values.push(slack_bot_token);
+      values.push(normalizeSecretValue(slack_bot_token));
     }
     if (app_base_url !== undefined) {
       let normalized = null;
@@ -297,13 +431,36 @@ router.put('/', authenticateToken, async (req, res) => {
     values.push(user_id);
     const result = await query(
       `UPDATE users SET ${fields.join(', ')} WHERE id = $${idx}
-       RETURNING id, email, slack_webhook_url, app_base_url, timezone,
+       RETURNING id, email, app_base_url, timezone, slack_user_id,
+                 slack_webhook_url, slack_bot_token,
                  slack_enabled, slack_intensity, quiet_hours_start, quiet_hours_end,
                  digest_morning_hour, digest_evening_hour, digests_enabled`,
       values
     );
 
-    res.json({ user: result.rows[0] });
+    const user = result.rows[0] || {};
+    const webhook = user.slack_webhook_url || '';
+    const token = user.slack_bot_token || '';
+    res.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        app_base_url: user.app_base_url,
+        timezone: user.timezone,
+        slack_user_id: user.slack_user_id,
+        slack_enabled: user.slack_enabled,
+        slack_intensity: user.slack_intensity,
+        quiet_hours_start: user.quiet_hours_start,
+        quiet_hours_end: user.quiet_hours_end,
+        digest_morning_hour: user.digest_morning_hour,
+        digest_evening_hour: user.digest_evening_hour,
+        digests_enabled: user.digests_enabled,
+        slack_bot_token_set: Boolean(token),
+        slack_webhook_set: Boolean(webhook),
+        slack_bot_token_last4: secretLast4(token),
+        slack_webhook_last4: secretLast4(webhook)
+      }
+    });
   } catch (error) {
     console.error('Update profile error:', error);
     res.status(500).json({ error: 'Failed to update profile' });

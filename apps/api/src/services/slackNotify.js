@@ -314,8 +314,123 @@ async function loadSessionFocusContext(sessionId, userId) {
 }
 
 /**
+ * Soft-fail: set Slack profile status for focus.
+ * users.profile.set usually needs a user token + users.profile:write; bot tokens often fail.
+ * Never throws — session start must not depend on this.
+ */
+async function setFocusProfileStatus(token, slackUserId, endsAt) {
+  if (!token) return { ok: false, error: 'no_token' };
+  try {
+    const expiration = Math.floor(new Date(endsAt).getTime() / 1000);
+    const body = {
+      profile: {
+        status_text: 'Focusing — MindSprint',
+        status_emoji: ':tomato:',
+        status_expiration: expiration
+      }
+    };
+    // Bot tokens may ignore `user`; include when we have a Slack user id.
+    if (slackUserId) body.user = slackUserId;
+    const result = await slackApi(token, 'users.profile.set', body);
+    if (!result?.ok) {
+      console.warn('users.profile.set soft-fail:', result?.error || result);
+    }
+    return result;
+  } catch (err) {
+    console.warn('users.profile.set soft-fail:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+/** Soft-fail: clear profile status after focus. */
+async function clearFocusProfileStatus(token, slackUserId) {
+  if (!token) return { ok: false, error: 'no_token' };
+  try {
+    const body = {
+      profile: {
+        status_text: '',
+        status_emoji: '',
+        status_expiration: 0
+      }
+    };
+    if (slackUserId) body.user = slackUserId;
+    const result = await slackApi(token, 'users.profile.set', body);
+    if (!result?.ok) {
+      console.warn('users.profile.set clear soft-fail:', result?.error || result);
+    }
+    return result;
+  } catch (err) {
+    console.warn('users.profile.set clear soft-fail:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Soft-fail DND snooze for remaining focus minutes.
+ * dnd.setSnooze typically requires a user token; bot tokens usually fail.
+ */
+async function setFocusDndSnooze(token, durationMinutes) {
+  if (!token) return { ok: false, error: 'no_token' };
+  const mins = Math.max(1, Math.min(120, Number(durationMinutes) || 25));
+  try {
+    const result = await slackApi(token, 'dnd.setSnooze', { num_minutes: mins });
+    if (!result?.ok) {
+      console.warn('dnd.setSnooze soft-fail:', result?.error || result);
+    }
+    return result;
+  } catch (err) {
+    console.warn('dnd.setSnooze soft-fail:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+async function clearFocusDndSnooze(token) {
+  if (!token) return { ok: false, error: 'no_token' };
+  try {
+    const result = await slackApi(token, 'dnd.endSnooze', {});
+    if (!result?.ok && result?.error !== 'snooze_not_active') {
+      console.warn('dnd.endSnooze soft-fail:', result?.error || result);
+    }
+    return result;
+  } catch (err) {
+    console.warn('dnd.endSnooze soft-fail:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+function buildFocusInProgressBlocks(ctx, { focusUrl, ends, tz }) {
+  const taskLine = ctx.task_title ? `*${ctx.task_title}*` : '*Open focus*';
+  const projectLine = ctx.project_title ? `\n_Project: ${ctx.project_title}_` : '';
+  const mrkdwn =
+    `🍅 *Focus in progress* — ${modeLabel(ctx.mode)} · ${ctx.duration_minutes || 25}m\n` +
+    `${taskLine}\n` +
+    `Until ~*${formatClock(ends, tz)}* · leave them alone.${projectLine}`;
+  return {
+    text: `Focus in progress — ${ctx.task_title || 'session'} (${ctx.duration_minutes || 25}m)`,
+    blocks: [
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: mrkdwn }
+      },
+      {
+        type: 'actions',
+        elements: [
+          {
+            type: 'button',
+            text: { type: 'plain_text', text: 'Open timer' },
+            action_id: 'open_focus',
+            url: focusUrl
+          }
+        ]
+      }
+    ]
+  };
+}
+
+/**
  * Announce a focus session start in the linked project channel (or DM).
  * Stores channel + message ts on the session for later update.
+ * Also soft-fails profile status + DND (never blocks session start).
  */
 async function announceFocusStart(sessionId, userId, { channelOverride = null } = {}) {
   try {
@@ -328,36 +443,13 @@ async function announceFocusStart(sessionId, userId, { channelOverride = null } 
       : `${base}/focus`;
     const ends = focusEndsAt(ctx.started_at, ctx.duration_minutes);
     const tz = ctx.timezone || 'Europe/London';
-    const taskLine = ctx.task_title ? `*${ctx.task_title}*` : '*Open focus*';
-    const projectLine = ctx.project_title ? `\n_Project: ${ctx.project_title}_` : '';
     const channel = channelOverride || ctx.slack_channel_id || ctx.slack_user_id;
     if (!channel) return null;
 
-    const mrkdwn =
-      `🍅 *Focus in progress* — ${modeLabel(ctx.mode)} · ${ctx.duration_minutes || 25}m\n` +
-      `${taskLine}\n` +
-      `Until ~*${formatClock(ends, tz)}* · leave them alone.${projectLine}`;
-
+    const payload = buildFocusInProgressBlocks(ctx, { focusUrl, ends, tz });
     const posted = await slackApi(ctx.slack_bot_token, 'chat.postMessage', {
       channel,
-      text: `Focus in progress — ${ctx.task_title || 'session'} (${ctx.duration_minutes || 25}m)`,
-      blocks: [
-        {
-          type: 'section',
-          text: { type: 'mrkdwn', text: mrkdwn }
-        },
-        {
-          type: 'actions',
-          elements: [
-            {
-              type: 'button',
-              text: { type: 'plain_text', text: 'Open timer' },
-              action_id: 'open_focus',
-              url: focusUrl
-            }
-          ]
-        }
-      ]
+      ...payload
     });
 
     if (posted?.ok && posted.ts) {
@@ -370,6 +462,12 @@ async function announceFocusStart(sessionId, userId, { channelOverride = null } 
     } else if (!posted?.ok) {
       console.error('announceFocusStart failed:', posted?.error || posted);
     }
+
+    // Soft-fail extras — channel/Home presence is the reliable signal with a bot token.
+    const remainingMin = Math.max(1, Math.ceil((ends.getTime() - Date.now()) / 60000));
+    setFocusProfileStatus(ctx.slack_bot_token, ctx.slack_user_id, ends).catch(() => {});
+    setFocusDndSnooze(ctx.slack_bot_token, remainingMin).catch(() => {});
+
     return posted;
   } catch (err) {
     console.error('announceFocusStart error:', err.message);
@@ -378,7 +476,63 @@ async function announceFocusStart(sessionId, userId, { channelOverride = null } 
 }
 
 /**
+ * Refresh the in-channel focus presence message (e.g. after Extend +10m).
+ * Soft-fails profile status / DND refresh as well.
+ */
+async function updateFocusAnnouncement(sessionId, userId) {
+  try {
+    const ctx = await loadSessionFocusContext(sessionId, userId);
+    if (!ctx?.slack_bot_token) return null;
+
+    const base = resolveAppBase(ctx.app_base_url);
+    const focusUrl = ctx.task_id
+      ? `${base}/focus?taskId=${ctx.task_id}&taskTitle=${encodeURIComponent(ctx.task_title || 'Focus')}`
+      : `${base}/focus`;
+    const ends = focusEndsAt(ctx.started_at, ctx.duration_minutes);
+    const tz = ctx.timezone || 'Europe/London';
+    const payload = buildFocusInProgressBlocks(ctx, { focusUrl, ends, tz });
+    const channel = ctx.slack_focus_channel_id || ctx.slack_channel_id || ctx.slack_user_id;
+    if (!channel) return null;
+
+    let result = null;
+    if (ctx.slack_focus_ts) {
+      result = await slackApi(ctx.slack_bot_token, 'chat.update', {
+        channel,
+        ts: ctx.slack_focus_ts,
+        ...payload
+      });
+      if (!result?.ok) {
+        console.error('updateFocusAnnouncement chat.update failed:', result?.error || result);
+      }
+    } else {
+      result = await slackApi(ctx.slack_bot_token, 'chat.postMessage', {
+        channel,
+        ...payload
+      });
+      if (result?.ok && result.ts) {
+        await query(
+          `UPDATE sessions
+           SET slack_focus_channel_id = $1, slack_focus_ts = $2
+           WHERE id = $3`,
+          [result.channel || channel, result.ts, sessionId]
+        );
+      }
+    }
+
+    const remainingMin = Math.max(1, Math.ceil((ends.getTime() - Date.now()) / 60000));
+    setFocusProfileStatus(ctx.slack_bot_token, ctx.slack_user_id, ends).catch(() => {});
+    setFocusDndSnooze(ctx.slack_bot_token, remainingMin).catch(() => {});
+
+    return result;
+  } catch (err) {
+    console.error('updateFocusAnnouncement error:', err.message);
+    return null;
+  }
+}
+
+/**
  * Update Slack when a focus session ends (completes the original presence message).
+ * Soft-fails clearing profile status + DND.
  */
 async function announceFocusEnd(sessionId, userId, { abandoned = false } = {}) {
   try {
@@ -396,6 +550,10 @@ async function announceFocusEnd(sessionId, userId, { abandoned = false } = {}) {
       (ctx.project_title ? `\n_Project: ${ctx.project_title}_` : '');
 
     const channel = ctx.slack_focus_channel_id || ctx.slack_channel_id || ctx.slack_user_id;
+
+    clearFocusProfileStatus(ctx.slack_bot_token, ctx.slack_user_id).catch(() => {});
+    clearFocusDndSnooze(ctx.slack_bot_token).catch(() => {});
+
     if (!channel) return null;
 
     if (ctx.slack_focus_ts) {
@@ -477,6 +635,9 @@ module.exports = {
   ensureProjectForSlackChannel,
   announceFocusStart,
   announceFocusEnd,
+  updateFocusAnnouncement,
+  setFocusProfileStatus,
+  clearFocusProfileStatus,
   abandonOpenFocusSessions,
   getActiveFocusSession,
   focusEndsAt,

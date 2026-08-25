@@ -1,12 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
 import LoadingSpinner from './LoadingSpinner';
-import { BarChart3, TrendingUp, Award, Calendar } from 'lucide-react';
+import { BarChart3, TrendingUp, Award, Calendar, Brain, Clock, Leaf, AlertTriangle, Lightbulb } from 'lucide-react';
+
+const REC_META = {
+  learning: { icon: Brain, label: 'Focus tip', accent: 'text-emerald-300 bg-emerald-500/15 border-emerald-400/20' },
+  environment: { icon: Leaf, label: 'Environment', accent: 'text-teal-300 bg-teal-500/15 border-teal-400/20' },
+  timing: { icon: Clock, label: 'Timing', accent: 'text-amber-300 bg-amber-500/15 border-amber-400/20' },
+  distraction: { icon: AlertTriangle, label: 'Distraction', accent: 'text-orange-300 bg-orange-500/15 border-orange-400/20' },
+};
 
 export default function Reflections() {
   const [sessions, setSessions] = useState([]);
   const [stats, setStats] = useState(null);
   const [recommendations, setRecommendations] = useState([]);
+  const [learningTip, setLearningTip] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -23,7 +31,9 @@ export default function Reflections() {
 
       setSessions(sessionsRes.data.sessions || []);
       setStats(statsRes.data || null);
-      setRecommendations(recsRes.data.recommendations || []);
+      const recs = recsRes.data.recommendations || [];
+      setRecommendations(recs);
+      setLearningTip(recsRes.data.tip || recs.find((r) => r.type === 'learning')?.message || null);
     } catch (error) {
       console.error('Failed to load reflections:', error);
     } finally {
@@ -47,11 +57,12 @@ export default function Reflections() {
     return <LoadingSpinner embedded />;
   }
 
+  const displayRecs = recommendations.filter((r) => !(r.type === 'learning' && learningTip && (r.message || r) === learningTip));
+
   return (
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <h2 className="text-3xl font-bold text-white mb-8">Your Reflections</h2>
 
-        {/* Stats Overview */}
         {stats && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
             <div className="backdrop-blur-xl bg-white/10 border border-white/20 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all">
@@ -104,24 +115,45 @@ export default function Reflections() {
           </div>
         )}
 
-        {/* AI Recommendations */}
-        {recommendations && recommendations.length > 0 && (
+        {(learningTip || displayRecs.length > 0) && (
           <div className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl p-6 mb-8">
-            <h3 className="text-xl font-bold text-white mb-4">AI Insights</h3>
-            <div className="space-y-3">
-              {recommendations.map((rec, idx) => (
-                <div key={idx} className="bg-white/5 rounded-lg p-4">
-                  <div className="text-white/90">{rec.message || rec}</div>
-                  {rec.type && (
-                    <div className="text-white/50 text-sm mt-1 capitalize">{rec.type}</div>
-                  )}
+            <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+              <Lightbulb size={22} className="text-amber-300" />
+              Learned for you
+            </h3>
+            {learningTip && (
+              <div className="mb-4 rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-4 py-3">
+                <div className="text-emerald-200 text-xs font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5">
+                  <Brain size={14} /> Focus tip
                 </div>
-              ))}
-            </div>
+                <p className="text-emerald-50/95 leading-relaxed">{learningTip}</p>
+              </div>
+            )}
+            {displayRecs.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {displayRecs.map((rec, idx) => {
+                  const message = typeof rec === 'string' ? rec : (rec.message || String(rec));
+                  const type = typeof rec === 'object' ? rec.type : null;
+                  const meta = REC_META[type] || { icon: Lightbulb, label: type || 'Insight', accent: 'text-white/70 bg-white/5 border-white/10' };
+                  const Icon = meta.icon;
+                  return (
+                    <div
+                      key={idx}
+                      className={`rounded-lg p-4 border flex items-start gap-3 ${meta.accent}`}
+                    >
+                      <Icon size={18} className="shrink-0 mt-0.5 opacity-90" />
+                      <div>
+                        <div className="text-[11px] uppercase tracking-wide opacity-70 mb-0.5">{meta.label}</div>
+                        <p className="text-white/90 text-sm leading-relaxed">{message}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
-        {/* Recent Sessions */}
         <div className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl p-6">
           <h3 className="text-xl font-bold text-white mb-6">Recent Sessions</h3>
           
@@ -168,4 +200,3 @@ export default function Reflections() {
       </main>
   );
 }
-

@@ -4,6 +4,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { assertTaskAccess } = require('../utils/access');
 const { parseLimit, parseOffset } = require('../utils/pagination');
 const { recordSessionEnd } = require('../services/learning');
+const { evaluateAchievements } = require('../services/achievements');
 const {
   announceFocusStart,
   announceFocusEnd,
@@ -76,9 +77,19 @@ router.post('/end', authenticateToken, async (req, res) => {
       notes,
       energy_level,
       focus_quality,
-      distractions,
       actual_duration_minutes
     } = req.body;
+
+    // Column is `distractions` (JSONB). Accept legacy `distracted` alias from clients.
+    const rawDistractions = req.body.distractions !== undefined
+      ? req.body.distractions
+      : req.body.distracted;
+    let distractions = null;
+    if (rawDistractions !== undefined && rawDistractions !== null) {
+      distractions = typeof rawDistractions === 'string'
+        ? rawDistractions
+        : JSON.stringify(rawDistractions);
+    }
 
     if (!session_id) {
       return res.status(400).json({ error: 'Session ID is required' });
@@ -105,7 +116,7 @@ router.post('/end', authenticateToken, async (req, res) => {
         notes = $3,
         energy_level = $4,
         focus_quality = $5,
-        distractions = $6,
+        distractions = $6::jsonb,
         completed = true
       WHERE id = $7
     `, [
@@ -114,7 +125,7 @@ router.post('/end', authenticateToken, async (req, res) => {
       notes,
       energy_level || null,
       focus_quality || null,
-      distractions || null,
+      distractions,
       session_id
     ]);
 
@@ -125,6 +136,13 @@ router.post('/end', authenticateToken, async (req, res) => {
       console.error('Learning profile update failed:', err.message);
     }
 
+    let achievements = [];
+    try {
+      achievements = await evaluateAchievements(user_id);
+    } catch (err) {
+      console.error('Achievement evaluation failed:', err.message);
+    }
+
     announceFocusEnd(session_id, user_id)
       .then(() => refreshSlackHome(user_id))
       .catch((err) => console.error('Focus Slack end announce error:', err.message));
@@ -133,7 +151,8 @@ router.post('/end', authenticateToken, async (req, res) => {
       message: 'Session ended successfully',
       learning: learning
         ? { tip: learning.best_tip, sampleCount: learning.sample_count }
-        : null
+        : null,
+      achievements
     });
   } catch (error) {
     console.error('End session error:', error);
@@ -159,6 +178,10 @@ router.delete('/complete-task', authenticateToken, async (req, res) => {
       SET status = 'done', completed_at = NOW()
       WHERE id = $1
     `, [task_id]);
+
+    evaluateAchievements(user_id).catch((err) =>
+      console.error('Achievement evaluation failed:', err.message)
+    );
 
     res.json({ message: 'Task completed successfully' });
   } catch (error) {

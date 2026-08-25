@@ -97,10 +97,22 @@ async function buildHomeView(user) {
       elements: [
         {
           type: 'button',
+          text: { type: 'plain_text', text: 'Done focusing' },
+          action_id: 'home_focus_done',
+          value: String(activeFocus.id),
+          style: 'primary'
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Extend +10m' },
+          action_id: 'home_focus_extend',
+          value: String(activeFocus.id)
+        },
+        {
+          type: 'button',
           text: { type: 'plain_text', text: 'Open timer' },
           action_id: 'home_open_focus',
-          url: focusUrl,
-          style: 'primary'
+          url: focusUrl
         }
       ]
     });

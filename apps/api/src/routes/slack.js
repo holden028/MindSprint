@@ -5,6 +5,7 @@ const { requireSlackSignature } = require('../utils/slackVerify');
 const { buildHomeView, buildCreateTaskModal } = require('../utils/slackHome');
 const { runAssistantChat } = require('../services/aiChat');
 const { createAutoReminders } = require('../services/reminders');
+const { recordSessionEnd } = require('../services/learning');
 const {
   resolveAppBase,
   taskOpenUrl,
@@ -13,6 +14,9 @@ const {
   postSlackDM,
   ensureProjectForSlackChannel,
   announceFocusStart,
+  announceFocusEnd,
+  updateFocusAnnouncement,
+  getActiveFocusSession,
   abandonOpenFocusSessions
 } = require('../services/slackNotify');
 
@@ -1009,6 +1013,90 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
             await startFocusSessionForUser(dbUser, { taskId, mode, durationMinutes });
           } catch (err) {
             console.error('home_start_focus error:', err);
+          }
+        });
+        return;
+      }
+
+      case 'home_focus_done': {
+        res.send('');
+        setImmediate(async () => {
+          try {
+            const sessionId = action.value || null;
+            const active = sessionId
+              ? await query(
+                  `SELECT id, started_at FROM sessions
+                   WHERE id = $1 AND user_id = $2 AND completed = false AND ended_at IS NULL`,
+                  [sessionId, dbUser.id]
+                )
+              : { rows: [] };
+            let session = active.rows[0];
+            if (!session) {
+              const fallback = await getActiveFocusSession(dbUser.id);
+              if (!fallback) return;
+              session = fallback;
+            }
+
+            await query(
+              `UPDATE sessions
+               SET ended_at = NOW(),
+                   completed = true,
+                   actual_duration_minutes = GREATEST(
+                     1,
+                     FLOOR(EXTRACT(EPOCH FROM (NOW() - started_at)) / 60)
+                   ),
+                   self_rating = COALESCE(self_rating, 5),
+                   notes = COALESCE(notes, 'Ended from Slack Home')
+               WHERE id = $1 AND user_id = $2 AND ended_at IS NULL`,
+              [session.id, dbUser.id]
+            );
+
+            try {
+              await recordSessionEnd(dbUser.id, session.id);
+            } catch (err) {
+              console.error('home_focus_done learning error:', err.message);
+            }
+
+            await announceFocusEnd(session.id, dbUser.id);
+            await publishHome(dbUser);
+          } catch (err) {
+            console.error('home_focus_done error:', err);
+          }
+        });
+        return;
+      }
+
+      case 'home_focus_extend': {
+        res.send('');
+        setImmediate(async () => {
+          try {
+            const sessionId = action.value || null;
+            let targetId = sessionId;
+            if (targetId) {
+              const check = await query(
+                `SELECT id FROM sessions
+                 WHERE id = $1 AND user_id = $2 AND completed = false AND ended_at IS NULL`,
+                [targetId, dbUser.id]
+              );
+              if (!check.rows[0]) targetId = null;
+            }
+            if (!targetId) {
+              const active = await getActiveFocusSession(dbUser.id);
+              if (!active) return;
+              targetId = active.id;
+            }
+
+            await query(
+              `UPDATE sessions
+               SET duration_minutes = COALESCE(duration_minutes, 25) + 10
+               WHERE id = $1 AND user_id = $2 AND ended_at IS NULL`,
+              [targetId, dbUser.id]
+            );
+
+            await updateFocusAnnouncement(targetId, dbUser.id);
+            await publishHome(dbUser);
+          } catch (err) {
+            console.error('home_focus_extend error:', err);
           }
         });
         return;

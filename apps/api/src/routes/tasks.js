@@ -8,6 +8,7 @@ const { updatePriorities } = require('../services/priorities');
 const { createAutoReminders, syncTaskReminders } = require('../services/reminders');
 const { normalizeEmail, assignTask } = require('../services/sharing');
 const { postTaskToProjectChannel } = require('../services/slackNotify');
+const { evaluateAchievements } = require('../services/achievements');
 
 const router = express.Router();
 
@@ -264,6 +265,9 @@ async function updateTask(req, res) {
     }
 
     if (updates.status === 'done') {
+      evaluateAchievements(user_id).catch((err) =>
+        console.error('Achievement evaluation failed:', err.message)
+      );
       postTaskToProjectChannel({
         projectId: task.project_id,
         ownerUserId: access.owner_id || user_id,

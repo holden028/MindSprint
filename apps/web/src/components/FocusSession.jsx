@@ -37,6 +37,7 @@ export default function FocusSession() {
   const [startTime, setStartTime] = useState(null);
   const [learningTip, setLearningTip] = useState(null);
   const [learningConfidence, setLearningConfidence] = useState('low');
+  const [learningReasons, setLearningReasons] = useState([]);
 
   useEffect(() => {
     if (selectedTask?.est_minutes && !isRunning) {
@@ -66,6 +67,7 @@ export default function FocusSession() {
         if (suggestRes.data?.tip) {
           setLearningTip(suggestRes.data.tip);
           setLearningConfidence(suggestRes.data.confidence || 'low');
+          setLearningReasons(Array.isArray(suggestRes.data.reasons) ? suggestRes.data.reasons : []);
         }
         if (suggestRes.data?.environment && Object.keys(suggestRes.data.environment).length > 0) {
           setEnvironment((prev) => ({ ...prev, ...suggestRes.data.environment }));
@@ -189,7 +191,7 @@ export default function FocusSession() {
       setSessionId(null);
       setSelectedTask(null);
       setStartTime(null);
-      navigate('/reflections');
+      navigate('/progress');
     } catch (error) {
       console.error('Failed to end session:', error);
       alert(`Failed to save session: ${error.response?.data?.error || error.message}`);
@@ -269,6 +271,11 @@ export default function FocusSession() {
               )}
             </div>
             <p className="text-emerald-100/90 leading-relaxed">{learningTip}</p>
+            {learningReasons.length > 0 && (
+              <p className="text-emerald-100/55 text-xs mt-1.5">
+                Why: {learningReasons.join(' · ')}
+              </p>
+            )}
             <p className="text-emerald-100/50 text-xs mt-2">Suggested toggles are pre-selected — change anything you like.</p>
           </div>
         )}

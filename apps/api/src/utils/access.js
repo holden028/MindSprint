@@ -130,6 +130,14 @@ async function getProjectAccess(projectId, userId) {
   const result = await query(
     `SELECT p.id, p.user_id as owner_id,
             (p.user_id = $2) as is_owner,
+            (
+              SELECT s.role FROM shares s
+              WHERE s.status = 'accepted'
+                AND s.invitee_user_id = $2
+                AND s.project_id = p.id
+              ORDER BY CASE WHEN s.role = 'edit' THEN 0 ELSE 1 END
+              LIMIT 1
+            ) as project_role,
             EXISTS (
               SELECT 1 FROM shares s
               WHERE s.status = 'accepted'
@@ -146,11 +154,15 @@ async function getProjectAccess(projectId, userId) {
   const row = result.rows[0];
   if (!row) return null;
   if (!row.is_owner && !row.is_collaborator) return null;
+  const isOwner = !!row.is_owner;
+  const myRole = isOwner ? 'edit' : (row.project_role || null);
   return {
     ...row,
-    is_owner: !!row.is_owner,
-    can_edit: !!row.is_owner,
-    can_delete: !!row.is_owner
+    is_owner: isOwner,
+    is_shared: !isOwner,
+    my_role: myRole,
+    can_edit: isOwner || myRole === 'edit',
+    can_delete: isOwner
   };
 }
 

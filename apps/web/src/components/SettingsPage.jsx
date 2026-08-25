@@ -67,6 +67,9 @@ export default function SettingsPage() {
   const [webhookUrl, setWebhookUrl] = useState('');
   const [slackUserId, setSlackUserId] = useState('');
   const [botToken, setBotToken] = useState('');
+  const [botTokenSet, setBotTokenSet] = useState(false);
+  const [webhookSet, setWebhookSet] = useState(false);
+  const [projectChannelLinked, setProjectChannelLinked] = useState(false);
   const [appBaseUrl, setAppBaseUrl] = useState('');
   const [timezone, setTimezone] = useState('Europe/London');
   const [slackEnabled, setSlackEnabled] = useState(true);
@@ -102,10 +105,16 @@ export default function SettingsPage() {
   const loadSettings = async () => {
     try {
       const { data } = await api.get('/profile/settings');
-      if (data.slack_webhook_url) setWebhookUrl(data.slack_webhook_url);
+      // Never hydrate secret fields from the API — leave blank; show "set" via flags.
+      setWebhookUrl('');
+      setBotToken('');
+      setBotTokenSet(!!data.slack_bot_token_set);
+      setWebhookSet(!!data.slack_webhook_set);
+      setProjectChannelLinked(!!data.slack_project_channel_linked);
       if (data.slack_user_id) setSlackUserId(data.slack_user_id);
-      if (data.slack_bot_token) setBotToken(data.slack_bot_token);
+      else setSlackUserId('');
       if (data.app_base_url) setAppBaseUrl(data.app_base_url);
+      else setAppBaseUrl('');
       if (data.timezone) setTimezone(data.timezone);
       else {
         try {
@@ -179,10 +188,8 @@ export default function SettingsPage() {
     setSaving(true);
     setStatus(null);
     try {
-      await api.put('/profile', {
-        slack_webhook_url: webhookUrl || null,
+      const payload = {
         slack_user_id: slackUserId || null,
-        slack_bot_token: botToken || null,
         app_base_url: appBaseUrl || null,
         timezone: timezone || 'Europe/London',
         slack_enabled: slackEnabled,
@@ -192,7 +199,15 @@ export default function SettingsPage() {
         digest_morning_hour: digestMorningHour,
         digest_evening_hour: digestEveningHour,
         digests_enabled: digestsEnabled,
-      });
+      };
+      // Only send secrets when the user typed a new value (omit = keep stored).
+      if (botToken.trim()) payload.slack_bot_token = botToken.trim();
+      if (webhookUrl.trim()) payload.slack_webhook_url = webhookUrl.trim();
+
+      await api.put('/profile', payload);
+      setWebhookUrl('');
+      setBotToken('');
+      await loadSettings();
       setStatus({ type: 'success', msg: 'Settings saved!' });
     } catch (err) {
       setStatus({ type: 'error', msg: err.response?.data?.error || 'Failed to save settings' });
@@ -607,12 +622,35 @@ export default function SettingsPage() {
           Get task reminders and notifications sent to a Slack channel. Takes 2 minutes.
         </p>
 
+        {/* Compact onboarding checklist */}
+        <ul className="mb-5 space-y-1.5 text-sm">
+          {[
+            { done: botTokenSet || !!botToken.trim(), label: 'Bot token saved', hint: 'Paste xoxb-… below' },
+            { done: !!slackUserId.trim(), label: 'Slack User ID', hint: 'Profile → ⋯ → Copy member ID' },
+            { done: !!appBaseUrl.trim(), label: 'App base URL', hint: 'Set in the App URL section above' },
+            { done: projectChannelLinked, label: 'Link a project channel (optional)', hint: '/sprint link My Project in a channel' },
+          ].map((item) => (
+            <li key={item.label} className="flex items-start gap-2">
+              <span className={`mt-0.5 shrink-0 ${item.done ? 'text-green-400' : 'text-white/30'}`}>
+                {item.done ? <CheckCircle size={14} /> : <span className="inline-block w-3.5 h-3.5 rounded-full border border-current" />}
+              </span>
+              <span>
+                <span className={item.done ? 'text-white/80' : 'text-white/55'}>{item.label}</span>
+                {!item.done && (
+                  <span className="text-white/35 ml-1.5 text-xs">— {item.hint}</span>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+
         <label className="block text-sm font-medium text-white/70 mb-1.5">Incoming Webhook URL</label>
         <input
-          type="url"
+          type="password"
+          autoComplete="off"
           value={webhookUrl}
           onChange={(e) => setWebhookUrl(e.target.value)}
-          placeholder="https://hooks.slack.com/services/T00.../B00.../xxx"
+          placeholder={webhookSet ? '•••• set' : 'https://hooks.slack.com/services/T00.../B00.../xxx'}
           className="w-full backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-purple-500/50 mb-3 text-sm"
         />
 
@@ -634,9 +672,10 @@ export default function SettingsPage() {
         </label>
         <input
           type="password"
+          autoComplete="off"
           value={botToken}
           onChange={(e) => setBotToken(e.target.value)}
-          placeholder="xoxb-..."
+          placeholder={botTokenSet ? '•••• set' : 'xoxb-...'}
           className="w-full backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-purple-500/50 mb-4 text-sm"
         />
 
@@ -650,7 +689,7 @@ export default function SettingsPage() {
           </button>
           <button
             onClick={handleTest}
-            disabled={testing || (!webhookUrl.trim() && !botToken.trim())}
+            disabled={testing || (!webhookUrl.trim() && !botToken.trim() && !webhookSet && !botTokenSet)}
             className="backdrop-blur-sm bg-white/10 border border-white/20 text-white px-6 py-2.5 rounded-xl hover:bg-white/20 transition-all text-sm font-medium disabled:opacity-50"
           >
             {testing ? 'Sending...' : 'Send Test'}

@@ -1,7 +1,7 @@
 const express = require('express');
 const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
-const { taskVisibleSql, projectVisibleSql, taskAccessSelectSql, withTaskAccessFlags } = require('../utils/access');
+const { taskVisibleSql, projectVisibleSql, taskAccessSelectSql, withTaskAccessFlags, getProjectAccess } = require('../utils/access');
 const { getSuggestions } = require('../services/learning');
 
 const router = express.Router();
@@ -234,7 +234,17 @@ router.get('/projects/:projectId', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    res.json({ project: result.rows[0] });
+    const access = await getProjectAccess(projectId, user_id);
+    const project = result.rows[0];
+    res.json({
+      project: {
+        ...project,
+        is_owner: access?.is_owner ?? !project.is_shared,
+        can_edit: access?.can_edit ?? !project.is_shared,
+        can_delete: access?.can_delete ?? !project.is_shared,
+        my_role: access?.my_role || null
+      }
+    });
   } catch (error) {
     console.error('Project error:', error);
     res.status(500).json({ error: 'Failed to load project' });

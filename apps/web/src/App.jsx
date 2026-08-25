@@ -8,11 +8,9 @@ import BuildBadge from './components/BuildBadge';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const FocusSession = lazy(() => import('./components/FocusSession'));
-const Reflections = lazy(() => import('./components/Reflections'));
+const ProgressPage = lazy(() => import('./components/ProgressPage'));
 const Projects = lazy(() => import('./components/Projects'));
 const ProjectView = lazy(() => import('./components/ProjectView'));
-const InsightsDashboard = lazy(() => import('./components/InsightsDashboard'));
-const GamificationDashboard = lazy(() => import('./components/GamificationDashboard'));
 const TemplatesPage = lazy(() => import('./components/TemplatesPage'));
 const AdminLogin = lazy(() => import('./components/AdminLogin'));
 const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
@@ -94,11 +92,12 @@ function AppRoutes() {
         >
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/focus" element={<FocusSession />} />
-          <Route path="/reflections" element={<Reflections />} />
+          <Route path="/progress" element={<ProgressPage />} />
+          <Route path="/reflections" element={<Navigate to="/progress?tab=reflections" replace />} />
+          <Route path="/insights" element={<Navigate to="/progress?tab=insights" replace />} />
+          <Route path="/achievements" element={<Navigate to="/progress?tab=achievements" replace />} />
           <Route path="/projects" element={<Projects />} />
           <Route path="/projects/:projectId" element={<ProjectView />} />
-          <Route path="/insights" element={<InsightsDashboard />} />
-          <Route path="/achievements" element={<GamificationDashboard />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/templates" element={<TemplatesPage />} />
           <Route path="/calendar" element={<CalendarPage />} />

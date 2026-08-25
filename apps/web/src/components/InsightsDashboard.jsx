@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import api from '../services/api';
 import LoadingSpinner from './LoadingSpinner';
 import { 
-  TrendingUp, 
   Clock, 
   Zap, 
   Brain, 
@@ -11,12 +10,14 @@ import {
   CheckCircle,
   BarChart3,
   PieChart,
-  Activity
+  Activity,
+  RefreshCw
 } from 'lucide-react';
 
 export default function InsightsDashboard() {
   const [insights, setInsights] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [rebuilding, setRebuilding] = useState(false);
 
   useEffect(() => {
     loadInsights();
@@ -33,38 +34,68 @@ export default function InsightsDashboard() {
     }
   };
 
+  const handleRebuild = async () => {
+    setRebuilding(true);
+    try {
+      const { data } = await api.post('/profile/learning/rebuild');
+      setInsights((prev) => ({
+        ...(prev || {}),
+        tip: data.tip ?? prev?.tip,
+        sampleCount: data.sampleCount ?? prev?.sampleCount
+      }));
+      await loadInsights();
+    } catch (error) {
+      console.error('Failed to rebuild profile:', error);
+      alert(error.response?.data?.error || 'Failed to rebuild learning profile');
+    } finally {
+      setRebuilding(false);
+    }
+  };
+
   if (loading) {
     return <LoadingSpinner embedded />;
   }
 
   const bestTimeOfDay = insights?.bestTimeOfDay || { hour: 14, sessions: 0 };
-  const bestEnvironment = insights?.bestEnvironment || { environment: 'None', avgRating: 0 };
   const avgEnergy = insights?.avgEnergy ?? 3;
   const avgFocus = insights?.avgFocus ?? 3;
   const topDistraction = insights?.topDistraction || { type: 'None', count: 0 };
 
   return (
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8">
-          <h2 className="text-3xl font-bold text-white mb-2">Productivity Insights</h2>
-          <p className="text-white/60">Learned from your focus sessions — what actually helps you</p>
+        <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-3xl font-bold text-white mb-2">Productivity Insights</h2>
+            <p className="text-white/60">Learned from your focus sessions — what actually helps you</p>
+          </div>
+          <button
+            type="button"
+            onClick={handleRebuild}
+            disabled={rebuilding}
+            className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm backdrop-blur-md bg-white/10 hover:bg-white/15 border border-white/20 text-white/90 transition-all disabled:opacity-50"
+          >
+            <RefreshCw size={16} className={rebuilding ? 'animate-spin' : ''} />
+            {rebuilding ? 'Rebuilding…' : 'Rebuild profile'}
+          </button>
         </div>
 
-        {insights?.tip && (
+        {(insights?.tip || insights?.sampleCount != null) && (
           <div className="mb-8 rounded-2xl border border-emerald-400/25 bg-emerald-500/10 px-5 py-4">
-            <div className="text-emerald-200 text-sm font-semibold mb-1 flex items-center gap-2">
+            <div className="text-emerald-200 text-sm font-semibold mb-1 flex items-center gap-2 flex-wrap">
               <Brain size={18} /> Your focus profile
               {insights.sampleCount != null && (
                 <span className="text-emerald-200/60 font-normal">· {insights.sampleCount} sessions</span>
               )}
             </div>
-            <p className="text-emerald-50/95 leading-relaxed">{insights.tip}</p>
+            {insights?.tip ? (
+              <p className="text-emerald-50/95 leading-relaxed">{insights.tip}</p>
+            ) : (
+              <p className="text-emerald-50/70 text-sm">Complete a few focus sessions to build your tip.</p>
+            )}
           </div>
         )}
 
-        {/* Key Metrics */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          {/* Best Time of Day */}
           <div className="backdrop-blur-xl bg-white/10 border border-white/20 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all">
             <div className="flex items-center gap-3 mb-3">
               <div className="p-3 bg-orange-500/20 rounded-lg">
@@ -84,7 +115,6 @@ export default function InsightsDashboard() {
             </p>
           </div>
 
-          {/* Average Energy */}
           <div className="backdrop-blur-xl bg-white/10 border border-white/20 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all">
             <div className="flex items-center gap-3 mb-3">
               <div className="p-3 bg-green-500/20 rounded-lg">
@@ -105,7 +135,6 @@ export default function InsightsDashboard() {
             </div>
           </div>
 
-          {/* Average Focus */}
           <div className="backdrop-blur-xl bg-white/10 border border-white/20 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all">
             <div className="flex items-center gap-3 mb-3">
               <div className="p-3 bg-purple-500/20 rounded-lg">
@@ -126,7 +155,6 @@ export default function InsightsDashboard() {
             </div>
           </div>
 
-          {/* Top Distraction */}
           <div className="backdrop-blur-xl bg-white/10 border border-white/20 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all">
             <div className="flex items-center gap-3 mb-3">
               <div className="p-3 bg-red-500/20 rounded-lg">
@@ -141,8 +169,7 @@ export default function InsightsDashboard() {
           </div>
         </div>
 
-        {/* Time of Day Performance */}
-        {insights?.hourlyPerformance && (
+        {insights?.hourlyPerformance && insights.hourlyPerformance.length > 0 && (
           <div className="backdrop-blur-xl bg-white/10 border border-white/20 rounded-2xl p-6 mb-8">
             <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
               <BarChart3 size={24} />
@@ -167,8 +194,7 @@ export default function InsightsDashboard() {
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-          {/* Best Environments */}
-          {insights?.environmentPerformance && (
+          {insights?.environmentPerformance && insights.environmentPerformance.length > 0 && (
             <div className="backdrop-blur-xl bg-white/10 border border-white/20 rounded-2xl p-6">
               <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
                 <PieChart size={24} />
@@ -195,8 +221,7 @@ export default function InsightsDashboard() {
             </div>
           )}
 
-          {/* Distraction Analysis */}
-          {insights?.distractionAnalysis && (
+          {insights?.distractionAnalysis && insights.distractionAnalysis.length > 0 && (
             <div className="backdrop-blur-xl bg-white/10 border border-white/20 rounded-2xl p-6">
               <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
                 <Activity size={24} />
@@ -225,7 +250,6 @@ export default function InsightsDashboard() {
           )}
         </div>
 
-        {/* Recommendations */}
         {insights?.recommendations && insights.recommendations.length > 0 && (
           <div className="backdrop-blur-xl bg-white/10 border border-white/20 rounded-2xl p-6">
             <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
@@ -236,7 +260,7 @@ export default function InsightsDashboard() {
               {insights.recommendations.map((rec, idx) => (
                 <div key={idx} className="bg-white/5 rounded-lg p-4 flex items-start gap-3">
                   <CheckCircle className="text-green-400 flex-shrink-0 mt-0.5" size={20} />
-                  <p className="text-white/90 text-sm">{rec}</p>
+                  <p className="text-white/90 text-sm">{typeof rec === 'string' ? rec : rec.message || rec}</p>
                 </div>
               ))}
             </div>
@@ -259,4 +283,3 @@ function getDistractionEmoji(type) {
   };
   return emojis[type] || '❓';
 }
-

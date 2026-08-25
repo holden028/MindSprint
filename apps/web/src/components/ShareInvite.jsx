@@ -94,7 +94,9 @@ export default function ShareInvite({ taskId, projectId, canShare = true }) {
         Share
       </h3>
       <p className="text-xs text-white/45 mb-3">
-        They keep their own tasks. Shared items show up beside those — they cannot see anything you have not invited them to.
+        Invite by email. If they already have a MindSprint account with that email, access is immediate.
+        Otherwise they must <span className="text-white/70">register/login with the same email</span> to claim the invite
+        (no email is sent yet — tell them yourself).
       </p>
       {canShare && (
         <form onSubmit={handleInvite} className="flex flex-col sm:flex-row gap-2 mb-3">

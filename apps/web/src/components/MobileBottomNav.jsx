@@ -1,11 +1,11 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Target, CalendarDays, FolderKanban, Settings } from 'lucide-react';
+import { Home, Target, BarChart3, FolderKanban, Settings } from 'lucide-react';
 
 const ITEMS = [
   { path: '/dashboard', icon: Home, label: 'Today' },
   { path: '/focus', icon: Target, label: 'Focus' },
-  { path: '/calendar', icon: CalendarDays, label: 'Calendar' },
+  { path: '/progress', icon: BarChart3, label: 'Progress', match: ['/progress', '/reflections', '/insights', '/achievements'] },
   { path: '/projects', icon: FolderKanban, label: 'Projects' },
   { path: '/settings', icon: Settings, label: 'Settings' },
 ];
@@ -18,7 +18,10 @@ export default function MobileBottomNav() {
       <div className="flex items-stretch justify-around h-16">
         {ITEMS.map((item) => {
           const Icon = item.icon;
-          const active = location.pathname === item.path || location.pathname.startsWith(item.path + '/');
+          const paths = item.match || [item.path];
+          const active = paths.some(
+            (p) => location.pathname === p || location.pathname.startsWith(`${p}/`)
+          );
           return (
             <Link
               key={item.path}
