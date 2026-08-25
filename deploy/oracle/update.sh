@@ -35,8 +35,7 @@ fi
 
 export VITE_BUILD_SHA="$(git rev-parse --short HEAD)"
 
-# Drop orphaned/renamed containers from previous failed recreates
-"${DOCKER[@]}" compose -f docker-compose.oracle.yml --env-file "$ENV_FILE" down --remove-orphans || true
-"${DOCKER[@]}" compose -f docker-compose.oracle.yml --env-file "$ENV_FILE" up -d --build
+# Drop orphaned/renamed containers from previous failed recreates (no full down — keeps DB up)
+"${DOCKER[@]}" compose -f docker-compose.oracle.yml --env-file "$ENV_FILE" up -d --build --remove-orphans
 "${DOCKER[@]}" compose -f docker-compose.oracle.yml --env-file "$ENV_FILE" ps
 echo "Deployed $(git rev-parse --short HEAD)"
