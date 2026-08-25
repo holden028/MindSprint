@@ -11,7 +11,9 @@ const {
   slackApi,
   postTaskToProjectChannel,
   postSlackDM,
-  ensureProjectForSlackChannel
+  ensureProjectForSlackChannel,
+  announceFocusStart,
+  abandonOpenFocusSessions
 } = require('../services/slackNotify');
 
 const router = express.Router();
@@ -141,6 +143,25 @@ async function publishUnlinkedHome(slackUserId) {
       ]
     }
   });
+}
+
+async function startFocusSessionForUser(user, {
+  taskId = null,
+  mode = 'pomodoro',
+  durationMinutes = 25,
+  channelId = null
+} = {}) {
+  await abandonOpenFocusSessions(user.id);
+  const result = await query(
+    `INSERT INTO sessions (user_id, task_id, mode, duration_minutes, environment)
+     VALUES ($1, $2, $3, $4, '{}'::jsonb)
+     RETURNING *`,
+    [user.id, taskId, mode, durationMinutes]
+  );
+  const session = result.rows[0];
+  await announceFocusStart(session.id, user.id, { channelOverride: channelId || null });
+  publishHome(user).catch(() => {});
+  return session;
 }
 
 async function openCreateTaskModal(user, triggerId, { channelId = null, projectId = null } = {}) {
@@ -678,6 +699,74 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
         return;
       }
 
+      case 'focus': {
+        // /sprint focus [minutes] [task title|#]
+        const rest = parts.slice(1);
+        let durationMinutes = 25;
+        let mode = 'pomodoro';
+        let taskQueryParts = rest;
+        if (rest[0] && /^\d+$/.test(rest[0])) {
+          durationMinutes = Math.min(90, Math.max(5, parseInt(rest[0], 10)));
+          taskQueryParts = rest.slice(1);
+          if (durationMinutes <= 15) mode = 'adhd';
+        }
+        const taskQuery = taskQueryParts.join(' ').trim();
+        let task = null;
+        if (taskQuery) {
+          if (/^\d+$/.test(taskQuery)) {
+            const listed = await query(
+              `SELECT t.id, t.title, t.est_minutes FROM tasks t
+               JOIN projects p ON t.project_id = p.id
+               WHERE p.user_id = $1 AND t.status != 'done'
+               ORDER BY COALESCE(t.due_at, '2999-01-01') ASC, t.priority DESC
+               LIMIT 20`,
+              [user.id]
+            );
+            task = listed.rows[parseInt(taskQuery, 10) - 1] || null;
+          } else {
+            const found = await query(
+              `SELECT t.id, t.title, t.est_minutes FROM tasks t
+               JOIN projects p ON t.project_id = p.id
+               WHERE p.user_id = $1 AND t.status != 'done' AND LOWER(t.title) LIKE $2
+               LIMIT 1`,
+              [user.id, `%${taskQuery.toLowerCase()}%`]
+            );
+            task = found.rows[0] || null;
+          }
+          if (!task) {
+            return res.json({
+              response_type: 'ephemeral',
+              text: `No open task matching "${taskQuery}". Try \`/sprint list\` then \`/sprint focus 25 1\`.`
+            });
+          }
+          if (!rest[0] || !/^\d+$/.test(rest[0])) {
+            durationMinutes = Math.min(90, Math.max(5, task.est_minutes || 25));
+            if (durationMinutes <= 15) mode = 'adhd';
+          }
+        }
+
+        const frontend = resolveAppBase(user.app_base_url);
+        const focusUrl = task
+          ? `${frontend}/focus?taskId=${task.id}&taskTitle=${encodeURIComponent(task.title)}`
+          : `${frontend}/focus`;
+
+        res.json({
+          response_type: 'ephemeral',
+          text:
+            `Starting ${durationMinutes}m focus` +
+            (task ? ` on *${task.title}*` : '') +
+            `. Posted presence to Slack — open the live timer: ${focusUrl}`
+        });
+
+        startFocusSessionForUser(user, {
+          taskId: task?.id || null,
+          mode,
+          durationMinutes,
+          channelId: channelId && !channelId.startsWith('D') ? channelId : null
+        }).catch((err) => console.error('/sprint focus error:', err));
+        return;
+      }
+
       case 'help':
       default: {
         if (!action) {
@@ -704,6 +793,7 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
                   '`/sprint done <number or title>` — Complete a task\n' +
                   '`/sprint ask <question>` — Ask the AI (reply via DM)\n' +
                   '`/sprint due <title|#> YYYY-MM-DD` — Set a due date\n' +
+                  '`/sprint focus [mins] [task]` — Start a focus sprint (posts in channel)\n' +
                   '`/sprint link <project>` — Link this channel to a project\n' +
                   '`/sprint home` — Refresh App Home\n' +
                   '`/sprint help` — Show this help\n' +
@@ -897,6 +987,30 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
         openCreateTaskModal(dbUser, triggerId || payload.trigger_id).catch((err) =>
           console.error('Home new task modal error:', err)
         );
+        return;
+      }
+
+      case 'home_start_focus': {
+        res.send('');
+        setImmediate(async () => {
+          try {
+            let taskId = action.value && action.value !== 'none' ? action.value : null;
+            let durationMinutes = 25;
+            let mode = 'pomodoro';
+            if (taskId) {
+              const task = await findAccessibleTask(taskId, dbUser.id);
+              if (!task) taskId = null;
+              else {
+                const full = await query('SELECT est_minutes FROM tasks WHERE id = $1', [taskId]);
+                durationMinutes = Math.min(90, Math.max(5, full.rows[0]?.est_minutes || 25));
+                if (durationMinutes <= 15) mode = 'adhd';
+              }
+            }
+            await startFocusSessionForUser(dbUser, { taskId, mode, durationMinutes });
+          } catch (err) {
+            console.error('home_start_focus error:', err);
+          }
+        });
         return;
       }
 

@@ -274,6 +274,197 @@ async function ensureProjectForSlackChannel({ channelId, channelName, creatorSla
   return project;
 }
 
+function modeLabel(mode) {
+  return mode === 'adhd' ? 'ADHD sprint' : 'Pomodoro';
+}
+
+function focusEndsAt(startedAt, durationMinutes) {
+  const start = new Date(startedAt || Date.now());
+  return new Date(start.getTime() + (Number(durationMinutes) || 25) * 60 * 1000);
+}
+
+function formatClock(date, timeZone = 'Europe/London') {
+  try {
+    return new Date(date).toLocaleTimeString('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone
+    });
+  } catch {
+    return new Date(date).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  }
+}
+
+async function loadSessionFocusContext(sessionId, userId) {
+  const result = await query(
+    `SELECT s.id, s.user_id, s.task_id, s.mode, s.duration_minutes, s.actual_duration_minutes,
+            s.started_at, s.ended_at, s.completed, s.self_rating,
+            s.slack_focus_channel_id, s.slack_focus_ts,
+            t.title as task_title, t.project_id,
+            p.title as project_title, p.slack_channel_id, p.slack_channel_name,
+            u.slack_bot_token, u.slack_user_id, u.app_base_url, u.timezone
+     FROM sessions s
+     JOIN users u ON u.id = s.user_id
+     LEFT JOIN tasks t ON t.id = s.task_id
+     LEFT JOIN projects p ON p.id = t.project_id
+     WHERE s.id = $1 AND s.user_id = $2`,
+    [sessionId, userId]
+  );
+  return result.rows[0] || null;
+}
+
+/**
+ * Announce a focus session start in the linked project channel (or DM).
+ * Stores channel + message ts on the session for later update.
+ */
+async function announceFocusStart(sessionId, userId, { channelOverride = null } = {}) {
+  try {
+    const ctx = await loadSessionFocusContext(sessionId, userId);
+    if (!ctx?.slack_bot_token) return null;
+
+    const base = resolveAppBase(ctx.app_base_url);
+    const focusUrl = ctx.task_id
+      ? `${base}/focus?taskId=${ctx.task_id}&taskTitle=${encodeURIComponent(ctx.task_title || 'Focus')}`
+      : `${base}/focus`;
+    const ends = focusEndsAt(ctx.started_at, ctx.duration_minutes);
+    const tz = ctx.timezone || 'Europe/London';
+    const taskLine = ctx.task_title ? `*${ctx.task_title}*` : '*Open focus*';
+    const projectLine = ctx.project_title ? `\n_Project: ${ctx.project_title}_` : '';
+    const channel = channelOverride || ctx.slack_channel_id || ctx.slack_user_id;
+    if (!channel) return null;
+
+    const mrkdwn =
+      `🍅 *Focus in progress* — ${modeLabel(ctx.mode)} · ${ctx.duration_minutes || 25}m\n` +
+      `${taskLine}\n` +
+      `Until ~*${formatClock(ends, tz)}* · leave them alone.${projectLine}`;
+
+    const posted = await slackApi(ctx.slack_bot_token, 'chat.postMessage', {
+      channel,
+      text: `Focus in progress — ${ctx.task_title || 'session'} (${ctx.duration_minutes || 25}m)`,
+      blocks: [
+        {
+          type: 'section',
+          text: { type: 'mrkdwn', text: mrkdwn }
+        },
+        {
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              text: { type: 'plain_text', text: 'Open timer' },
+              action_id: 'open_focus',
+              url: focusUrl
+            }
+          ]
+        }
+      ]
+    });
+
+    if (posted?.ok && posted.ts) {
+      await query(
+        `UPDATE sessions
+         SET slack_focus_channel_id = $1, slack_focus_ts = $2
+         WHERE id = $3`,
+        [posted.channel || channel, posted.ts, sessionId]
+      );
+    } else if (!posted?.ok) {
+      console.error('announceFocusStart failed:', posted?.error || posted);
+    }
+    return posted;
+  } catch (err) {
+    console.error('announceFocusStart error:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Update Slack when a focus session ends (completes the original presence message).
+ */
+async function announceFocusEnd(sessionId, userId, { abandoned = false } = {}) {
+  try {
+    const ctx = await loadSessionFocusContext(sessionId, userId);
+    if (!ctx?.slack_bot_token) return null;
+
+    const mins = ctx.actual_duration_minutes
+      || Math.max(1, Math.round((Date.now() - new Date(ctx.started_at).getTime()) / 60000));
+    const rating = ctx.self_rating != null ? ` · rated ${ctx.self_rating}/10` : '';
+    const taskLine = ctx.task_title ? `*${ctx.task_title}*` : '*Focus session*';
+    const status = abandoned ? 'cancelled / superseded' : 'complete';
+    const mrkdwn =
+      `✅ *Focus ${status}* — ${mins}m ${modeLabel(ctx.mode).toLowerCase()}${rating}\n` +
+      `${taskLine}` +
+      (ctx.project_title ? `\n_Project: ${ctx.project_title}_` : '');
+
+    const channel = ctx.slack_focus_channel_id || ctx.slack_channel_id || ctx.slack_user_id;
+    if (!channel) return null;
+
+    if (ctx.slack_focus_ts) {
+      const updated = await slackApi(ctx.slack_bot_token, 'chat.update', {
+        channel,
+        ts: ctx.slack_focus_ts,
+        text: `Focus ${status} — ${ctx.task_title || 'session'} (${mins}m)`,
+        blocks: [
+          {
+            type: 'section',
+            text: { type: 'mrkdwn', text: mrkdwn }
+          }
+        ]
+      });
+      if (updated?.ok) return updated;
+      console.error('announceFocusEnd update failed:', updated?.error || updated);
+    }
+
+    return slackApi(ctx.slack_bot_token, 'chat.postMessage', {
+      channel,
+      text: `Focus ${status} — ${ctx.task_title || 'session'} (${mins}m)`,
+      blocks: [{ type: 'section', text: { type: 'mrkdwn', text: mrkdwn } }]
+    });
+  } catch (err) {
+    console.error('announceFocusEnd error:', err.message);
+    return null;
+  }
+}
+
+/** Close any other open sessions for this user before starting a new one. */
+async function abandonOpenFocusSessions(userId, exceptSessionId = null) {
+  const open = await query(
+    `SELECT id FROM sessions
+     WHERE user_id = $1 AND completed = false AND ended_at IS NULL
+       AND ($2::uuid IS NULL OR id != $2)
+     ORDER BY started_at DESC`,
+    [userId, exceptSessionId]
+  );
+  for (const row of open.rows) {
+    await query(
+      `UPDATE sessions
+       SET ended_at = NOW(),
+           completed = true,
+           actual_duration_minutes = GREATEST(
+             1,
+             FLOOR(EXTRACT(EPOCH FROM (NOW() - started_at)) / 60)
+           )
+       WHERE id = $1`,
+      [row.id]
+    );
+    await announceFocusEnd(row.id, userId, { abandoned: true }).catch(() => {});
+  }
+}
+
+async function getActiveFocusSession(userId) {
+  const result = await query(
+    `SELECT s.id, s.mode, s.duration_minutes, s.started_at, s.task_id,
+            t.title as task_title, t.project_id, p.title as project_title
+     FROM sessions s
+     LEFT JOIN tasks t ON t.id = s.task_id
+     LEFT JOIN projects p ON p.id = t.project_id
+     WHERE s.user_id = $1 AND s.completed = false AND s.ended_at IS NULL
+     ORDER BY s.started_at DESC
+     LIMIT 1`,
+    [userId]
+  );
+  return result.rows[0] || null;
+}
+
 module.exports = {
   resolveAppBase,
   taskOpenUrl,
@@ -283,5 +474,12 @@ module.exports = {
   postSlackDM,
   slugifyChannelName,
   ensureSlackChannelForProject,
-  ensureProjectForSlackChannel
+  ensureProjectForSlackChannel,
+  announceFocusStart,
+  announceFocusEnd,
+  abandonOpenFocusSessions,
+  getActiveFocusSession,
+  focusEndsAt,
+  formatClock,
+  modeLabel
 };

@@ -1,6 +1,13 @@
 const { query } = require('../config/database');
 const { buildTaskActionBlocks } = require('./slackBlocks');
-const { resolveAppBase, taskOpenUrl } = require('../services/slackNotify');
+const {
+  resolveAppBase,
+  taskOpenUrl,
+  getActiveFocusSession,
+  focusEndsAt,
+  formatClock,
+  modeLabel
+} = require('../services/slackNotify');
 const { formatNowInTimezone } = require('./timezone');
 
 function intensityLabel(intensity) {
@@ -19,7 +26,7 @@ async function buildHomeView(user) {
   const tz = user.timezone || 'Europe/London';
   const nowLabel = formatNowInTimezone(tz, new Date());
 
-  const [tasksResult, projectsResult, blocksResult] = await Promise.all([
+  const [tasksResult, projectsResult, blocksResult, activeFocus] = await Promise.all([
     query(`
       SELECT t.id, t.title, t.status, t.due_at, t.est_minutes, t.priority, t.project_id, p.title as project_title
       FROM tasks t
@@ -45,7 +52,8 @@ async function buildHomeView(user) {
       SELECT title, starts_at, ends_at, recurrence_rule
       FROM time_blocks WHERE user_id = $1
       ORDER BY starts_at ASC LIMIT 5
-    `, [user.id])
+    `, [user.id]),
+    getActiveFocusSession(user.id)
   ]);
 
   const blocks = [
@@ -59,36 +67,80 @@ async function buildHomeView(user) {
         type: 'mrkdwn',
         text: `Hey <@${user.slack_user_id || ''}> — local time *${nowLabel}*.\nWhat do you want to tackle?`
       }
-    },
-    {
+    }
+  ];
+
+  if (activeFocus) {
+    const ends = focusEndsAt(activeFocus.started_at, activeFocus.duration_minutes);
+    const remainingMs = ends.getTime() - Date.now();
+    const remainingMin = Math.max(0, Math.ceil(remainingMs / 60000));
+    const overdue = remainingMs < 0;
+    const focusUrl = activeFocus.task_id
+      ? `${frontend}/focus?taskId=${activeFocus.task_id}&taskTitle=${encodeURIComponent(activeFocus.task_title || 'Focus')}`
+      : `${frontend}/focus`;
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text:
+          `🍅 *Focus ${overdue ? 'overdue' : 'in progress'}*\n` +
+          `${activeFocus.task_title ? `*${activeFocus.task_title}*` : '_No task linked_'} · ` +
+          `${modeLabel(activeFocus.mode)} · ${activeFocus.duration_minutes || 25}m\n` +
+          (overdue
+            ? `_Past end time (${formatClock(ends, tz)}) — wrap up in the app._`
+            : `~*${remainingMin}m* left · ends ~${formatClock(ends, tz)}`)
+      }
+    });
+    blocks.push({
       type: 'actions',
-      block_id: 'home_actions',
+      block_id: 'home_focus_active',
       elements: [
         {
           type: 'button',
-          text: { type: 'plain_text', text: 'Plan my day', emoji: true },
-          action_id: 'home_plan_day',
+          text: { type: 'plain_text', text: 'Open timer' },
+          action_id: 'home_open_focus',
+          url: focusUrl,
           style: 'primary'
-        },
-        {
-          type: 'button',
-          text: { type: 'plain_text', text: 'New task', emoji: true },
-          action_id: 'home_new_task'
-        },
-        {
-          type: 'button',
-          text: { type: 'plain_text', text: 'Open MindSprint' },
-          action_id: 'home_open_app',
-          url: `${frontend}/dashboard`
         }
       ]
-    },
-    { type: 'divider' },
-    {
-      type: 'section',
-      text: { type: 'mrkdwn', text: '*Today*' }
-    }
-  ];
+    });
+    blocks.push({ type: 'divider' });
+  }
+
+  blocks.push({
+    type: 'actions',
+    block_id: 'home_actions',
+    elements: [
+      {
+        type: 'button',
+        text: { type: 'plain_text', text: 'Plan my day', emoji: true },
+        action_id: 'home_plan_day',
+        style: activeFocus ? undefined : 'primary'
+      },
+      {
+        type: 'button',
+        text: { type: 'plain_text', text: 'New task', emoji: true },
+        action_id: 'home_new_task'
+      },
+      {
+        type: 'button',
+        text: { type: 'plain_text', text: 'Start focus' },
+        action_id: 'home_start_focus',
+        value: tasksResult.rows[0] ? String(tasksResult.rows[0].id) : 'none'
+      },
+      {
+        type: 'button',
+        text: { type: 'plain_text', text: 'Open MindSprint' },
+        action_id: 'home_open_app',
+        url: `${frontend}/dashboard`
+      }
+    ]
+  });
+  blocks.push({ type: 'divider' });
+  blocks.push({
+    type: 'section',
+    text: { type: 'mrkdwn', text: '*Today*' }
+  });
 
   if (tasksResult.rows.length === 0) {
     blocks.push({

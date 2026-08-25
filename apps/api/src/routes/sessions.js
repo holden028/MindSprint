@@ -4,8 +4,36 @@ const { authenticateToken } = require('../middleware/auth');
 const { assertTaskAccess } = require('../utils/access');
 const { parseLimit, parseOffset } = require('../utils/pagination');
 const { recordSessionEnd } = require('../services/learning');
+const {
+  announceFocusStart,
+  announceFocusEnd,
+  abandonOpenFocusSessions,
+  slackApi
+} = require('../services/slackNotify');
 
 const router = express.Router();
+
+async function refreshSlackHome(userId) {
+  try {
+    const full = await query(
+      `SELECT id, email, slack_user_id, slack_bot_token, slack_webhook_url, app_base_url, timezone,
+              slack_enabled, slack_intensity, quiet_hours_start, quiet_hours_end,
+              digests_enabled, digest_morning_hour, digest_evening_hour
+       FROM users WHERE id = $1`,
+      [userId]
+    );
+    const user = full.rows[0];
+    if (!user?.slack_bot_token || !user?.slack_user_id) return;
+    const { buildHomeView } = require('../utils/slackHome');
+    const home = await buildHomeView(user);
+    await slackApi(user.slack_bot_token, 'views.publish', {
+      user_id: user.slack_user_id,
+      view: home
+    });
+  } catch (err) {
+    console.error('refreshSlackHome error:', err.message);
+  }
+}
 
 // Start a focus session
 router.post('/start', authenticateToken, async (req, res) => {
@@ -18,13 +46,20 @@ router.post('/start', authenticateToken, async (req, res) => {
       if (!access) return;
     }
 
+    await abandonOpenFocusSessions(user_id);
+
     const result = await query(`
       INSERT INTO sessions (user_id, task_id, mode, duration_minutes, environment)
       VALUES ($1, $2, $3, $4, $5)
       RETURNING *
     `, [user_id, task_id, mode, duration_minutes, environment]);
 
-    res.status(201).json({ session: result.rows[0] });
+    const session = result.rows[0];
+    announceFocusStart(session.id, user_id)
+      .then(() => refreshSlackHome(user_id))
+      .catch((err) => console.error('Focus Slack announce error:', err.message));
+
+    res.status(201).json({ session });
   } catch (error) {
     console.error('Start session error:', error);
     res.status(500).json({ error: 'Failed to start session' });
@@ -89,6 +124,10 @@ router.post('/end', authenticateToken, async (req, res) => {
     } catch (err) {
       console.error('Learning profile update failed:', err.message);
     }
+
+    announceFocusEnd(session_id, user_id)
+      .then(() => refreshSlackHome(user_id))
+      .catch((err) => console.error('Focus Slack end announce error:', err.message));
 
     res.json({
       message: 'Session ended successfully',
