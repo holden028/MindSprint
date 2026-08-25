@@ -25,6 +25,8 @@ else
   exit 1
 fi
 
+export VITE_BUILD_SHA="$(git rev-parse --short HEAD)"
+
 "${DOCKER[@]}" compose -f docker-compose.oracle.yml --env-file "$ENV_FILE" up -d --build
 "${DOCKER[@]}" compose -f docker-compose.oracle.yml --env-file "$ENV_FILE" ps
 echo "Deployed $(git rev-parse --short HEAD)"

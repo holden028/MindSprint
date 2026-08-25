@@ -99,6 +99,7 @@ services:
       dockerfile: docker/web.Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL}
+        VITE_BUILD_SHA: ${VITE_BUILD_SHA:-unknown}
     restart: unless-stopped
     depends_on:
       - api

@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './components/Login';
 import PageLayout from './components/PageLayout';
 import LoadingSpinner from './components/LoadingSpinner';
+import BuildBadge from './components/BuildBadge';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const FocusSession = lazy(() => import('./components/FocusSession'));
@@ -121,6 +122,7 @@ function App() {
     <AuthProvider>
       <Router>
         <AppRoutes />
+        <BuildBadge />
       </Router>
     </AuthProvider>
   );
