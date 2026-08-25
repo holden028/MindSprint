@@ -185,12 +185,12 @@ In the app: **Settings → App URL** → save `https://yourname.duckdns.org` (fo
 After deploy, configure the Slack app at [api.slack.com/apps](https://api.slack.com/apps):
 
 1. **Event Subscriptions** → Request URL: `https://YOUR_DOMAIN/api/slack/events`  
-   Bot events: `message.im`, `app_mention`, `message.channels`, `app_home_opened`
+   Bot events: `message.im`, `app_mention`, `message.channels`, `app_home_opened`, `channel_created`, `group_created`
 2. **App Home** → enable Home Tab
 3. **Slash Commands** → `/sprint` → `https://YOUR_DOMAIN/api/slack/commands`
 4. **Interactivity** → `https://YOUR_DOMAIN/api/slack/interactions`  
    Global shortcut callback ID: `new_mindsprint_task`
-5. **OAuth scopes** (bot): `chat:write`, `im:history`, `im:write`, `app_mentions:read`, `channels:history`, `channels:read`, `groups:history`, `commands`, `users:read` — then reinstall
+5. **OAuth scopes** (bot): `chat:write`, `im:history`, `im:write`, `app_mentions:read`, `channels:history`, `channels:read`, `channels:manage`, `channels:join`, `groups:history`, `groups:write`, `commands` — then reinstall
 6. Put **Signing Secret** and a random **Workflow secret** in `deploy/oracle/.env`:
 
 ```env
@@ -202,7 +202,7 @@ Restart API/worker after env changes. In MindSprint Settings, paste Bot Token + 
 
 **Workflow Builder:** HTTP POST to `https://YOUR_DOMAIN/api/slack/workflows/create-task` with header `X-MindSprint-Workflow-Secret: <SLACK_WORKFLOW_SECRET>` and JSON `{ "title": "...", "channel_id": "C…", "slack_user_id": "U…" }` (or `project_id`).
 
-**Project channels:** Project page → Slack channel ID, or `/sprint link <project>` in the channel.
+**Project ↔ Slack (automatic):** Creating a MindSprint project creates a Slack channel (and links it). Creating a Slack channel creates a MindSprint project for the linked user. Manual override still available on the project page / `/sprint link`.
 
 ---
 

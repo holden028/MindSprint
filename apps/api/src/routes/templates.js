@@ -582,7 +582,16 @@ router.post('/projects/:id/use', authenticateToken, async (req, res) => {
     }
 
     await client.query('COMMIT');
-    res.status(201).json({ project, tasks: createdTasks });
+
+    let linkedProject = project;
+    try {
+      const { ensureSlackChannelForProject } = require('../services/slackNotify');
+      linkedProject = await ensureSlackChannelForProject(project, user_id);
+    } catch (err) {
+      console.error('Slack channel for template project failed:', err.message);
+    }
+
+    res.status(201).json({ project: linkedProject, tasks: createdTasks });
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Use project template error:', error);

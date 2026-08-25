@@ -781,7 +781,7 @@ export default function SettingsPage() {
                 <button onClick={() => copyToClipboard(`${apiBase}/slack/events`)} className="p-1 hover:bg-white/10 rounded"><Copy size={12} className="text-white/40" /></button>
               </div>
               <div className="text-sm text-white/60 space-y-1">
-                <p>Subscribe to bot events: <code className="text-white/70">message.im</code>, <code className="text-white/70">app_mention</code>, <code className="text-white/70">message.channels</code>, <code className="text-white/70">app_home_opened</code>.</p>
+                <p>Subscribe to bot events: <code className="text-white/70">message.im</code>, <code className="text-white/70">app_mention</code>, <code className="text-white/70">message.channels</code>, <code className="text-white/70">app_home_opened</code>, <code className="text-white/70">channel_created</code>, <code className="text-white/70">group_created</code>.</p>
                 <p>Under <strong className="text-white/80">App Home</strong>, enable the Home Tab.</p>
                 <p>From <strong className="text-white/80">Basic Information</strong>, copy the <strong className="text-white/80">Signing Secret</strong> into server env as <code className="text-white/70">SLACK_SIGNING_SECRET</code>.</p>
               </div>
@@ -794,7 +794,7 @@ export default function SettingsPage() {
                 OAuth scopes
               </h4>
               <div className="text-sm text-white/60 space-y-1">
-                <p>Bot Token Scopes: <code className="text-white/70">chat:write</code>, <code className="text-white/70">im:history</code>, <code className="text-white/70">im:write</code>, <code className="text-white/70">app_mentions:read</code>, <code className="text-white/70">channels:history</code>, <code className="text-white/70">channels:read</code>, <code className="text-white/70">groups:history</code>, <code className="text-white/70">commands</code>, <code className="text-white/70">users:read</code>.</p>
+                <p>Bot Token Scopes: <code className="text-white/70">chat:write</code>, <code className="text-white/70">im:history</code>, <code className="text-white/70">im:write</code>, <code className="text-white/70">app_mentions:read</code>, <code className="text-white/70">channels:history</code>, <code className="text-white/70">channels:read</code>, <code className="text-white/70">channels:manage</code>, <code className="text-white/70">channels:join</code>, <code className="text-white/70">groups:history</code>, <code className="text-white/70">groups:write</code>, <code className="text-white/70">commands</code>.</p>
                 <p>Reinstall the app after changing scopes.</p>
               </div>
             </div>

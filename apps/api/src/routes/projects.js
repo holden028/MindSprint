@@ -4,6 +4,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { patchRow } = require('../utils/dbHelpers');
 const { parseLimit, parseOffset } = require('../utils/pagination');
 const { projectVisibleSql, getProjectAccess } = require('../utils/access');
+const { ensureSlackChannelForProject } = require('../services/slackNotify');
 
 const router = express.Router();
 
@@ -53,7 +54,11 @@ router.post('/', authenticateToken, async (req, res) => {
       RETURNING *
     `, [user_id, title, description, tags]);
 
-    res.status(201).json({ project: result.rows[0] });
+    let project = result.rows[0];
+    // Auto-create + link a Slack channel when the user has a bot token configured
+    project = await ensureSlackChannelForProject(project, user_id);
+
+    res.status(201).json({ project });
   } catch (error) {
     console.error('Create project error:', error);
     res.status(500).json({ error: 'Failed to create project' });

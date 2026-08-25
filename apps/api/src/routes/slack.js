@@ -10,7 +10,8 @@ const {
   taskOpenUrl,
   slackApi,
   postTaskToProjectChannel,
-  postSlackDM
+  postSlackDM,
+  ensureProjectForSlackChannel
 } = require('../services/slackNotify');
 
 const router = express.Router();
@@ -253,6 +254,22 @@ router.post('/events', requireSlackSignature, async (req, res) => {
         if (event.type === 'app_home_opened') {
           const user = await getUserBySlackUserId(event.user);
           if (user) await publishHome(user);
+          return;
+        }
+
+        // New Slack channel → auto-create MindSprint project (for linked users)
+        if (event.type === 'channel_created' || event.type === 'group_created') {
+          const ch = event.channel || {};
+          const channelId = ch.id || event.channel;
+          const channelName = typeof ch === 'object' ? ch.name : null;
+          const creator = ch.creator || event.user;
+          if (channelId && creator) {
+            await ensureProjectForSlackChannel({
+              channelId: typeof channelId === 'string' ? channelId : channelId?.id,
+              channelName,
+              creatorSlackUserId: creator
+            });
+          }
           return;
         }
 

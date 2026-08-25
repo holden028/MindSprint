@@ -199,8 +199,8 @@ export default function ProjectView() {
                 Slack channel
               </h3>
               <p className="text-white/50 text-xs mb-3">
-                Link a channel for project-scoped @mentions and task create/doing/done/due posts.
-                Or run <code className="text-white/60">/sprint link {project.title}</code> inside the channel.
+                New projects auto-create a Slack channel (and new Slack channels auto-create a project) when your bot token is set.
+                You can still override the link here, or run <code className="text-white/60">/sprint link {project.title}</code>.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
                 <input
