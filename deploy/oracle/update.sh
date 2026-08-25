@@ -12,6 +12,14 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
+# Prevent overlapping deploys (GitHub Actions + manual SSH) from racing Docker recreate
+LOCK_FILE="${TMPDIR:-/tmp}/mindsprint-deploy.lock"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "Another deploy is in progress — waiting for lock…"
+  flock 9
+fi
+
 git fetch origin main
 git reset --hard origin/main
 git submodule update --init --recursive 2>/dev/null || true
@@ -27,6 +35,8 @@ fi
 
 export VITE_BUILD_SHA="$(git rev-parse --short HEAD)"
 
+# Drop orphaned/renamed containers from previous failed recreates
+"${DOCKER[@]}" compose -f docker-compose.oracle.yml --env-file "$ENV_FILE" down --remove-orphans || true
 "${DOCKER[@]}" compose -f docker-compose.oracle.yml --env-file "$ENV_FILE" up -d --build
 "${DOCKER[@]}" compose -f docker-compose.oracle.yml --env-file "$ENV_FILE" ps
 echo "Deployed $(git rev-parse --short HEAD)"
