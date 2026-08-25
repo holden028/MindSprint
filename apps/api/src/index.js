@@ -32,6 +32,9 @@ const shareRoutes = require('./routes/shares');
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+// Caddy / reverse proxies set X-Forwarded-*; required for rate-limit + correct IPs
+app.set('trust proxy', 1);
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,

@@ -4,6 +4,7 @@ import axios from 'axios';
  * Resolve API base URL for localhost and LAN IP access.
  * If the page is opened via http://192.168.x.x:5174 but VITE_API_URL
  * points at localhost, rewrite to the same host on the API port.
+ * Preserve path prefixes like `/api` (do not return origin alone).
  */
 function resolveApiUrl() {
   const configured = (import.meta.env.VITE_API_URL || 'http://localhost:8080').replace(/\/+$/, '');
@@ -17,9 +18,10 @@ function resolveApiUrl() {
 
     if (isLocalApi && isRemotePage) {
       api.hostname = pageHost;
-      return api.origin;
     }
-    return api.origin;
+
+    const path = api.pathname.replace(/\/+$/, '');
+    return path && path !== '/' ? `${api.origin}${path}` : api.origin;
   } catch {
     return configured;
   }

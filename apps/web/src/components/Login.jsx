@@ -21,8 +21,8 @@ export default function Login() {
 
     if (!result.success) {
       setError(result.error);
-      setLoading(false);
     }
+    setLoading(false);
   };
 
   return (
