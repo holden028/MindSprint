@@ -52,6 +52,9 @@ services:
       MAX_UPLOAD_BYTES: "10485760"
       TZ: ${TZ:-Europe/London}
       FRONTEND_URL: ${FRONTEND_URL}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
+      SLACK_WORKFLOW_SECRET: ${SLACK_WORKFLOW_SECRET:-}
+      SLACK_VERIFICATION_TOKEN: ${SLACK_VERIFICATION_TOKEN:-}
     volumes:
       - uploads_data:/app/uploads
     depends_on:

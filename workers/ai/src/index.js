@@ -389,7 +389,8 @@ const reminderWorker = new Worker('reminders', async () => {
     const dueReminders = await pool.query(
       `SELECT r.*, t.title as task_title, t.status as task_status, t.due_at, t.est_minutes,
               t.priority, t.urgency, t.project_id,
-              u.slack_webhook_url, u.slack_user_id, u.slack_bot_token, u.app_base_url, u.timezone
+              u.slack_webhook_url, u.slack_user_id, u.slack_bot_token, u.app_base_url, u.timezone,
+              u.slack_enabled, u.slack_intensity, u.quiet_hours_start, u.quiet_hours_end
        FROM reminders r
        JOIN tasks t ON r.task_id = t.id
        JOIN users u ON r.user_id = u.id
@@ -407,7 +408,12 @@ const reminderWorker = new Worker('reminders', async () => {
       const kind = reminder.kind || 'custom';
       const frontendUrl = resolveAppBase(reminder.app_base_url);
       const copy = buildReminderCopy(kind, reminder, frontendUrl);
-      const quiet = isQuietHours(reminder.timezone || 'Europe/London');
+      const quiet = isQuietHours(
+        reminder.timezone || 'Europe/London',
+        new Date(),
+        reminder.quiet_hours_start,
+        reminder.quiet_hours_end
+      );
 
       // Only create in-app notification once per logical event (prefer in_app row)
       if (reminder.channel === 'in_app') {
@@ -419,6 +425,14 @@ const reminderWorker = new Worker('reminders', async () => {
       }
 
       if (reminder.channel === 'slack') {
+        if (reminder.slack_enabled === false) {
+          await pool.query('UPDATE reminders SET sent = true WHERE id = $1', [reminder.id]);
+          continue;
+        }
+        if (!kindAllowedForIntensity(kind, reminder.slack_intensity || 'full') && kind !== 'custom') {
+          await pool.query('UPDATE reminders SET sent = true WHERE id = $1', [reminder.id]);
+          continue;
+        }
         // Quiet hours: keep in-app, skip Slack (morning digest will cover)
         if (quiet && kind !== 'deadline' && kind !== 'overdue') {
           await pool.query('UPDATE reminders SET sent = true WHERE id = $1', [reminder.id]);
@@ -475,9 +489,28 @@ function getHourInTimezone(timeZone = 'Europe/London', date = new Date()) {
   }
 }
 
-function isQuietHours(timeZone = 'Europe/London', date = new Date()) {
+function isQuietHours(timeZone = 'Europe/London', date = new Date(), startHour = 22, endHour = 7) {
   const hour = getHourInTimezone(timeZone, date);
-  return hour >= 22 || hour < 7;
+  const start = Number.isFinite(Number(startHour)) ? Number(startHour) : 22;
+  const end = Number.isFinite(Number(endHour)) ? Number(endHour) : 7;
+  if (start === end) return false;
+  if (start > end) {
+    // e.g. 22 → 7 overnight
+    return hour >= start || hour < end;
+  }
+  // e.g. 12 → 14 afternoon quiet
+  return hour >= start && hour < end;
+}
+
+const INTENSITY_KINDS = {
+  full: ['day_before', 'morning', 'start_by', 'two_hours', 'hour_before', 'half_hour', 'due_soon', 'five_min', 'deadline'],
+  medium: ['day_before', 'morning', 'start_by', 'hour_before', 'deadline'],
+  light: ['morning', 'hour_before', 'deadline']
+};
+
+function kindAllowedForIntensity(kind, intensity) {
+  const allowed = INTENSITY_KINDS[intensity] || INTENSITY_KINDS.full;
+  return allowed.includes(kind);
 }
 
 function formatDue(iso) {
@@ -897,18 +930,25 @@ const digestWorker = new Worker('morning-digest', async () => {
 
   try {
     const users = await pool.query(
-      `SELECT id, slack_bot_token, slack_user_id, slack_webhook_url, app_base_url, timezone FROM users`
+      `SELECT id, slack_bot_token, slack_user_id, slack_webhook_url, app_base_url, timezone,
+              slack_enabled, digests_enabled, digest_morning_hour, digest_evening_hour
+       FROM users`
     );
 
     for (const user of users.rows) {
+      if (user.slack_enabled === false || user.digests_enabled === false) continue;
+      if (!user.slack_bot_token && !user.slack_webhook_url) continue;
+
       const tz = user.timezone || 'Europe/London';
       const hour = getHourInTimezone(tz);
+      const morningHour = Number.isFinite(Number(user.digest_morning_hour)) ? Number(user.digest_morning_hour) : 9;
+      const eveningHour = Number.isFinite(Number(user.digest_evening_hour)) ? Number(user.digest_evening_hour) : 18;
 
-      if (hour === 9) {
+      if (hour === morningHour) {
         if (await recentlyNotified(user.id, 'morning_digest', null, '20 hours')) continue;
         const sent = await sendOwnerDigest(user, 'morning');
         if (sent) console.log(`☀️ Morning roundup sent to user ${user.id}`);
-      } else if (hour === 18) {
+      } else if (hour === eveningHour) {
         if (await recentlyNotified(user.id, 'evening_roundup', null, '20 hours')) continue;
         const sent = await sendOwnerDigest(user, 'evening');
         if (sent) console.log(`🌙 Evening roundup sent to user ${user.id}`);

@@ -263,12 +263,23 @@ router.get('/gamification', authenticateToken, async (req, res) => {
   }
 });
 
+const SLACK_INTENSITIES = new Set(['full', 'medium', 'light']);
+
+function clampHour(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(23, Math.max(0, Math.round(n)));
+}
+
 // Get user settings
 router.get('/settings', authenticateToken, async (req, res) => {
   try {
     const { user_id } = req.user;
     const result = await query(
-      'SELECT slack_webhook_url, slack_user_id, slack_bot_token, app_base_url, timezone FROM users WHERE id = $1',
+      `SELECT slack_webhook_url, slack_user_id, slack_bot_token, app_base_url, timezone,
+              slack_enabled, slack_intensity, quiet_hours_start, quiet_hours_end,
+              digest_morning_hour, digest_evening_hour, digests_enabled
+       FROM users WHERE id = $1`,
       [user_id]
     );
     res.json(result.rows[0] || {});
@@ -282,7 +293,11 @@ router.get('/settings', authenticateToken, async (req, res) => {
 router.put('/', authenticateToken, async (req, res) => {
   try {
     const { user_id } = req.user;
-    const { slack_webhook_url, slack_user_id, slack_bot_token, app_base_url, timezone } = req.body;
+    const {
+      slack_webhook_url, slack_user_id, slack_bot_token, app_base_url, timezone,
+      slack_enabled, slack_intensity, quiet_hours_start, quiet_hours_end,
+      digest_morning_hour, digest_evening_hour, digests_enabled
+    } = req.body;
 
     const fields = [];
     const values = [];
@@ -320,6 +335,37 @@ router.put('/', authenticateToken, async (req, res) => {
       fields.push(`timezone = $${idx++}`);
       values.push(tz);
     }
+    if (slack_enabled !== undefined) {
+      fields.push(`slack_enabled = $${idx++}`);
+      values.push(!!slack_enabled);
+    }
+    if (slack_intensity !== undefined) {
+      if (!SLACK_INTENSITIES.has(slack_intensity)) {
+        return res.status(400).json({ error: 'slack_intensity must be full, medium, or light' });
+      }
+      fields.push(`slack_intensity = $${idx++}`);
+      values.push(slack_intensity);
+    }
+    if (quiet_hours_start !== undefined) {
+      fields.push(`quiet_hours_start = $${idx++}`);
+      values.push(clampHour(quiet_hours_start, 22));
+    }
+    if (quiet_hours_end !== undefined) {
+      fields.push(`quiet_hours_end = $${idx++}`);
+      values.push(clampHour(quiet_hours_end, 7));
+    }
+    if (digest_morning_hour !== undefined) {
+      fields.push(`digest_morning_hour = $${idx++}`);
+      values.push(clampHour(digest_morning_hour, 9));
+    }
+    if (digest_evening_hour !== undefined) {
+      fields.push(`digest_evening_hour = $${idx++}`);
+      values.push(clampHour(digest_evening_hour, 18));
+    }
+    if (digests_enabled !== undefined) {
+      fields.push(`digests_enabled = $${idx++}`);
+      values.push(!!digests_enabled);
+    }
 
     if (fields.length === 0) {
       return res.status(400).json({ error: 'No valid fields to update' });
@@ -328,7 +374,9 @@ router.put('/', authenticateToken, async (req, res) => {
     values.push(user_id);
     const result = await query(
       `UPDATE users SET ${fields.join(', ')} WHERE id = $${idx}
-       RETURNING id, email, slack_webhook_url, app_base_url, timezone`,
+       RETURNING id, email, slack_webhook_url, app_base_url, timezone,
+                 slack_enabled, slack_intensity, quiet_hours_start, quiet_hours_end,
+                 digest_morning_hour, digest_evening_hour, digests_enabled`,
       values
     );
 

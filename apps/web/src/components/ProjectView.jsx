@@ -3,7 +3,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import LoadingSpinner from './LoadingSpinner';
 import ManualTaskModal from './ManualTaskModal';
-import { ArrowLeft, Clock, Flag, Trash2, Target, Plus, Repeat, LayoutTemplate } from 'lucide-react';
+import { ArrowLeft, Clock, Flag, Trash2, Target, Plus, Repeat, LayoutTemplate, Hash, Unlink } from 'lucide-react';
 import { getPriorityColor } from '../utils/colors';
 import ShareInvite from './ShareInvite';
 import AttachmentsPanel from './AttachmentsPanel';
@@ -18,6 +18,10 @@ export default function ProjectView() {
   const [loading, setLoading] = useState(true);
   const [showAddTask, setShowAddTask] = useState(false);
   const [savingTemplate, setSavingTemplate] = useState(false);
+  const [slackChannelId, setSlackChannelId] = useState('');
+  const [slackChannelName, setSlackChannelName] = useState('');
+  const [savingSlack, setSavingSlack] = useState(false);
+  const [slackMsg, setSlackMsg] = useState(null);
 
   useEffect(() => {
     loadProject();
@@ -37,6 +41,8 @@ export default function ProjectView() {
 
       setProject(projectRes.data.project);
       setTasks(tasksRes.data.tasks || []);
+      setSlackChannelId(projectRes.data.project.slack_channel_id || '');
+      setSlackChannelName(projectRes.data.project.slack_channel_name || '');
     } catch (error) {
       console.error('Failed to load project:', error);
       if (error.response?.status === 404) {
@@ -61,6 +67,46 @@ export default function ProjectView() {
 
   const handleStartSession = (taskId, taskTitle) => {
     navigate(`/focus?taskId=${taskId}&taskTitle=${encodeURIComponent(taskTitle)}`);
+  };
+
+  const handleSaveSlackChannel = async () => {
+    setSavingSlack(true);
+    setSlackMsg(null);
+    try {
+      const id = slackChannelId.trim() || null;
+      const name = slackChannelName.trim().replace(/^#/, '') || null;
+      const { data } = await api.patch(`/projects/${projectId}`, {
+        slack_channel_id: id,
+        slack_channel_name: name,
+      });
+      setProject(data.project);
+      setSlackChannelId(data.project.slack_channel_id || '');
+      setSlackChannelName(data.project.slack_channel_name || '');
+      setSlackMsg(id ? 'Slack channel linked.' : 'Slack channel cleared.');
+    } catch (err) {
+      setSlackMsg(err.response?.data?.error || 'Failed to save Slack channel');
+    } finally {
+      setSavingSlack(false);
+    }
+  };
+
+  const handleUnlinkSlack = async () => {
+    setSlackChannelId('');
+    setSlackChannelName('');
+    setSavingSlack(true);
+    setSlackMsg(null);
+    try {
+      const { data } = await api.patch(`/projects/${projectId}`, {
+        slack_channel_id: null,
+        slack_channel_name: null,
+      });
+      setProject(data.project);
+      setSlackMsg('Slack channel unlinked.');
+    } catch (err) {
+      setSlackMsg(err.response?.data?.error || 'Failed to unlink');
+    } finally {
+      setSavingSlack(false);
+    }
   };
 
   if (loading) {
@@ -145,6 +191,54 @@ export default function ProjectView() {
           <div className="mt-6">
             <ShareInvite projectId={project.id} canShare={!project.is_shared} />
           </div>
+
+          {!project.is_shared && (
+            <div className="mt-6 backdrop-blur-sm bg-white/5 border border-white/10 rounded-xl p-4">
+              <h3 className="text-white font-medium text-sm mb-1 flex items-center gap-2">
+                <Hash size={16} className="text-purple-300" />
+                Slack channel
+              </h3>
+              <p className="text-white/50 text-xs mb-3">
+                Link a channel for project-scoped @mentions and task create/doing/done/due posts.
+                Or run <code className="text-white/60">/task link {project.title}</code> inside the channel.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                <input
+                  type="text"
+                  value={slackChannelId}
+                  onChange={(e) => setSlackChannelId(e.target.value)}
+                  placeholder="Channel ID (C012…)"
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white placeholder-white/30 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+                />
+                <input
+                  type="text"
+                  value={slackChannelName}
+                  onChange={(e) => setSlackChannelName(e.target.value)}
+                  placeholder="Channel name (optional)"
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white placeholder-white/30 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+                />
+              </div>
+              <div className="flex flex-wrap gap-2 items-center">
+                <button
+                  onClick={handleSaveSlackChannel}
+                  disabled={savingSlack}
+                  className="px-3 py-1.5 bg-purple-500/30 hover:bg-purple-500/40 border border-purple-400/30 text-purple-100 rounded-lg text-sm disabled:opacity-50"
+                >
+                  {savingSlack ? 'Saving…' : 'Save link'}
+                </button>
+                {(project.slack_channel_id || slackChannelId) && (
+                  <button
+                    onClick={handleUnlinkSlack}
+                    disabled={savingSlack}
+                    className="px-3 py-1.5 text-white/50 hover:text-red-300 text-sm inline-flex items-center gap-1"
+                  >
+                    <Unlink size={14} /> Unlink
+                  </button>
+                )}
+                {slackMsg && <span className="text-xs text-white/50">{slackMsg}</span>}
+              </div>
+            </div>
+          )}
 
           <div className="mt-6">
             <AttachmentsPanel projectId={project.id} canEdit={!project.is_shared} />

@@ -3,7 +3,7 @@ const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { chatJson } = require('../config/openai');
 const { updatePriorities } = require('../services/priorities');
-const { createAutoReminders } = require('../services/reminders');
+const { runAssistantChat } = require('../services/aiChat');
 
 const router = express.Router();
 const AUTO_TAG_CAP = 40;
@@ -481,338 +481,32 @@ Rules:
   }
 });
 
-// --- AI Chat Assistant ---
-
-async function getFullUserContext(userId) {
-  const [tasksResult, projectsResult, blocksResult, sessionsResult, userResult, attachmentsResult] = await Promise.all([
-    query(`
-      SELECT t.id, t.title, t.description, t.status, t.priority, t.urgency, t.est_minutes, t.due_at, p.title as project_title
-      FROM tasks t JOIN projects p ON t.project_id = p.id
-      WHERE p.user_id = $1 AND t.status != 'done'
-      ORDER BY COALESCE(t.due_at, '2999-01-01') ASC, t.priority DESC, t.urgency DESC
-      LIMIT 30
-    `, [userId]),
-    query('SELECT id, title, description FROM projects WHERE user_id = $1 ORDER BY created_at DESC LIMIT 15', [userId]),
-    query(`SELECT title, starts_at, ends_at, recurrence_rule FROM time_blocks WHERE user_id = $1`, [userId]),
-    query(`
-      SELECT s.duration_minutes, s.actual_duration_minutes, s.self_rating, s.started_at, t.title as task_title
-      FROM sessions s LEFT JOIN tasks t ON s.task_id = t.id
-      WHERE s.user_id = $1 AND s.completed = true
-      ORDER BY s.started_at DESC LIMIT 10
-    `, [userId]),
-    query('SELECT timezone FROM users WHERE id = $1', [userId]),
-    query(`
-      SELECT a.id, a.filename, a.mime_type, a.ai_summary, t.title as task_title, p.title as project_title
-      FROM attachments a
-      LEFT JOIN tasks t ON a.task_id = t.id
-      LEFT JOIN projects p ON a.project_id = p.id
-      WHERE a.user_id = $1
-      ORDER BY a.created_at DESC
-      LIMIT 25
-    `, [userId])
-  ]);
-
-  const { formatNowInTimezone } = require('../utils/timezone');
-  const timeZone = userResult.rows[0]?.timezone || 'Europe/London';
-  const nowDate = new Date();
-  const nowLabel = formatNowInTimezone(timeZone, nowDate);
-
-  const taskList = tasksResult.rows.map(t => {
-    const due = t.due_at
-      ? `due ${new Date(t.due_at).toLocaleString('en-GB', { timeZone })}`
-      : 'no deadline';
-    return `- [${t.status}] "${t.title}" (P${t.priority}/U${t.urgency}, ${t.est_minutes}min, ${due}, project: ${t.project_title})`;
-  }).join('\n');
-
-  const projectList = projectsResult.rows.map(p => `- "${p.title}": ${p.description || 'No description'}`).join('\n');
-
-  const scheduleList = blocksResult.rows.map(b => {
-    const rule = b.recurrence_rule;
-    const days = rule?.days ? rule.days.join(', ') : 'one-time';
-    const start = new Date(b.starts_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone });
-    const end = new Date(b.ends_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone });
-    return `- "${b.title}" ${start}-${end} (${days})`;
-  }).join('\n');
-
-  const sessionHistory = sessionsResult.rows.map(s =>
-    `- ${s.task_title || 'Unnamed'}: planned ${s.duration_minutes}min, actual ${s.actual_duration_minutes || '?'}min, rating ${s.self_rating || '?'}/10`
-  ).join('\n');
-
-  const attachmentList = attachmentsResult.rows.map(a => {
-    const linked = a.task_title
-      ? `task: ${a.task_title}`
-      : a.project_title
-        ? `project: ${a.project_title}`
-        : 'unlinked';
-    const summary = a.ai_summary ? `\n  Content: ${a.ai_summary.slice(0, 500)}` : '';
-    return `- [${a.id.slice(0, 8)}] "${a.filename}" (${a.mime_type}, ${linked})${summary}`;
-  }).join('\n');
-
-  return {
-    taskList,
-    projectList,
-    scheduleList,
-    sessionHistory,
-    attachmentList,
-    now: nowLabel,
-    timezone: timeZone,
-    projects: projectsResult.rows
-  };
-}
+// --- AI Chat Assistant (shared service) ---
 
 router.post('/chat', authenticateToken, async (req, res) => {
   try {
     const { user_id } = req.user;
-    const { message, conversation_id, attachment_ids: attachmentIds = [] } = req.body;
+    const {
+      message,
+      conversation_id,
+      project_id: projectId = null,
+      attachment_ids: attachmentIds = []
+    } = req.body;
 
-    if (!message?.trim() && (!Array.isArray(attachmentIds) || attachmentIds.length === 0)) {
-      return res.status(400).json({ error: 'Message or attachment is required' });
-    }
-
-    const userMessage = message?.trim() || 'Please review the attached file(s).';
-
-    const { taskList, projectList, scheduleList, sessionHistory, attachmentList, now, timezone, projects } = await getFullUserContext(user_id);
-
-    let chatAttachments = [];
-    if (Array.isArray(attachmentIds) && attachmentIds.length > 0) {
-      const attResult = await query(
-        `SELECT id, filename, mime_type, ai_summary, task_id, project_id
-         FROM attachments
-         WHERE user_id = $1 AND id = ANY($2::uuid[])`,
-        [user_id, attachmentIds]
-      );
-      chatAttachments = attResult.rows;
-    }
-
-    const chatAttachmentContext = chatAttachments.length > 0
-      ? `\nATTACHMENTS IN THIS MESSAGE:\n${chatAttachments.map(a =>
-          `- "${a.filename}" (${a.mime_type})${a.ai_summary ? `\n  ${a.ai_summary}` : ''}`
-        ).join('\n')}\n`
-      : '';
-
-    // Load or create conversation
-    let conversation;
-    if (conversation_id) {
-      const convResult = await query('SELECT * FROM ai_conversations WHERE id = $1 AND user_id = $2', [conversation_id, user_id]);
-      conversation = convResult.rows[0];
-    }
-
-    const prevMessages = conversation?.messages || [];
-    const historyContext = prevMessages.slice(-10).map(m => `${m.role}: ${m.content}`).join('\n');
-
-    const systemPrompt = `You are MindSprint AI — a smart productivity assistant for an ADHD-friendly task management app. The user's local time is ${now} (timezone: ${timezone}). Always answer time/date questions using this local time — never UTC unless they ask for UTC.
-
-CURRENT TASKS:
-${taskList || 'No tasks yet.'}
-
-PROJECTS:
-${projectList || 'No projects yet.'}
-
-SCHEDULE (blocked time):
-${scheduleList || 'No blocked time set.'}
-
-RECENT SESSIONS:
-${sessionHistory || 'No session history.'}
-
-ATTACHMENTS (files the user has uploaded — use their content when relevant):
-${attachmentList || 'No attachments yet.'}
-${chatAttachmentContext}
-
-${historyContext ? `CONVERSATION HISTORY:\n${historyContext}\n` : ''}
-
-You can perform ACTIONS by including a JSON block in your response wrapped in <action>...</action> tags. Available actions:
-
-1. Create a task:
-<action>{"type":"create_task","title":"...","description":"...","est_minutes":30,"priority":3,"urgency":3,"due_at":"ISO date or null","project_title":"existing project name or null","attachment_ids":["uuid"]}</action>
-
-2. Update a task:
-<action>{"type":"update_task","task_title":"exact existing task title","updates":{"status":"done","priority":4,"due_at":"ISO date"}}</action>
-
-IMPORTANT — DUE DATES:
-- Prefer always setting due_at when creating tasks (ask the user for a deadline if unclear).
-- If CURRENT TASKS shows "no deadline", proactively mention those tasks by name and offer to set due dates via update_task.
-- A background system also Slack-pings the user when open tasks lack due dates; reinforce that in chat when relevant.
-
-3. Block out time on the schedule:
-<action>{"type":"create_time_block","title":"...","date":"YYYY-MM-DD","start_time":"HH:MM","end_time":"HH:MM","recurrence_days":["mon","wed","fri"] or null}</action>
-
-4. Plan the day — suggest an ordered schedule of tasks to work on:
-<action>{"type":"plan_day"}</action>
-
-5. Link attachments to an existing task:
-<action>{"type":"attach_to_task","task_title":"exact task title","attachment_ids":["uuid"]}</action>
-
-RULES:
-- When the user shares attachments, read their summaries and reference them in your answer.
-- When creating a task from an attached file, include attachment_ids from the message.
-- When the user asks to create a task, extract all details and create it. Confirm what you created.
-- When asked "what should I work on" or "plan my day", consider deadlines, priority, urgency, estimated time, blocked time, and recent session patterns.
-- For day planning, account for the user's blocked time and suggest realistic scheduling.
-- Tasks can be interleaved (pomodoro style) — the user can work on bits of tasks, so you don't need contiguous time blocks.
-- You can include multiple <action> tags in one response.
-- If unsure about details, make reasonable assumptions and note them.
-- Never ask the user personal/identity questions. Learn from their data.`;
-
-    const { getOpenAI } = require('../config/openai');
-    const completion = await getOpenAI().chat.completions.create({
-      model: process.env.AI_MODEL || 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage }
-      ],
-      temperature: 0.5,
-      max_tokens: 2000
+    const result = await runAssistantChat({
+      userId: user_id,
+      message,
+      conversationId: conversation_id || null,
+      projectId: projectId || null,
+      attachmentIds
     });
 
-    const aiResponse = completion.choices[0].message.content;
-
-    // Execute any actions
-    const actionMatches = aiResponse.match(/<action>([\s\S]*?)<\/action>/g) || [];
-    const executedActions = [];
-
-    for (const match of actionMatches) {
-      try {
-        const json = match.replace(/<\/?action>/g, '').trim();
-        const action = JSON.parse(json);
-
-        if (action.type === 'create_task') {
-          let projectId = null;
-          if (action.project_title) {
-            const proj = projects.find(p => p.title.toLowerCase() === action.project_title.toLowerCase());
-            if (proj) projectId = proj.id;
-          }
-          if (!projectId) {
-            const personal = await query("SELECT id FROM projects WHERE user_id = $1 AND title = 'Personal Tasks'", [user_id]);
-            if (personal.rows.length > 0) {
-              projectId = personal.rows[0].id;
-            } else {
-              const np = await query("INSERT INTO projects (user_id, title, description) VALUES ($1, 'Personal Tasks', 'Personal tasks') RETURNING id", [user_id]);
-              projectId = np.rows[0].id;
-            }
-          }
-
-          const taskResult = await query(`
-            INSERT INTO tasks (project_id, title, description, priority, urgency, est_minutes, due_at, original_title, original_description)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *
-          `, [
-            projectId, action.title, action.description || '', action.priority || 3, action.urgency || 3,
-            action.est_minutes || 30, action.due_at || null, action.title, action.description || ''
-          ]);
-
-          const task = taskResult.rows[0];
-
-          if (Array.isArray(action.attachment_ids) && action.attachment_ids.length > 0) {
-            await query(
-              `UPDATE attachments SET task_id = $1, project_id = NULL
-               WHERE user_id = $2 AND id = ANY($3::uuid[])`,
-              [task.id, user_id, action.attachment_ids]
-            );
-          } else if (chatAttachments.length > 0) {
-            await query(
-              `UPDATE attachments SET task_id = $1, project_id = NULL
-               WHERE user_id = $2 AND id = ANY($3::uuid[])`,
-              [task.id, user_id, chatAttachments.map(a => a.id)]
-            );
-          }
-
-          // Auto-create typed reminder ladder if due_at set
-          if (action.due_at) {
-            await createAutoReminders(user_id, task.id, new Date(action.due_at), action.est_minutes || 30);
-          }
-
-          executedActions.push({ type: 'create_task', task });
-        } else if (action.type === 'update_task') {
-          if (action.task_title) {
-            const taskMatch = await query(`
-              SELECT t.id FROM tasks t JOIN projects p ON t.project_id = p.id
-              WHERE p.user_id = $1 AND LOWER(t.title) = LOWER($2) AND t.status != 'done' LIMIT 1
-            `, [user_id, action.task_title]);
-
-            if (taskMatch.rows.length > 0) {
-              const updates = action.updates || {};
-              const fields = [];
-              const vals = [];
-              let idx = 1;
-              for (const [key, val] of Object.entries(updates)) {
-                if (['status', 'priority', 'urgency', 'est_minutes', 'due_at', 'title', 'description'].includes(key)) {
-                  fields.push(`${key} = $${idx++}`);
-                  vals.push(val);
-                }
-              }
-              if (fields.length > 0) {
-                fields.push('updated_at = NOW()');
-                vals.push(taskMatch.rows[0].id);
-                await query(`UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx}`, vals);
-                executedActions.push({ type: 'update_task', task_id: taskMatch.rows[0].id });
-              }
-            }
-          }
-        } else if (action.type === 'create_time_block') {
-          const date = action.date || new Date().toISOString().slice(0, 10);
-          const startsAt = `${date}T${action.start_time || '09:00'}:00`;
-          const endsAt = `${date}T${action.end_time || '17:00'}:00`;
-          const recRule = action.recurrence_days?.length > 0
-            ? JSON.stringify({ freq: 'weekly', interval: 1, days: action.recurrence_days })
-            : null;
-
-          const blockResult = await query(
-            `INSERT INTO time_blocks (user_id, title, starts_at, ends_at, recurrence_rule)
-             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-            [user_id, action.title || 'Busy', startsAt, endsAt, recRule]
-          );
-          executedActions.push({ type: 'create_time_block', block: blockResult.rows[0] });
-        } else if (action.type === 'plan_day') {
-          executedActions.push({ type: 'plan_day' });
-        } else if (action.type === 'attach_to_task' && action.task_title) {
-          const taskMatch = await query(`
-            SELECT t.id FROM tasks t JOIN projects p ON t.project_id = p.id
-            WHERE p.user_id = $1 AND LOWER(t.title) = LOWER($2) LIMIT 1
-          `, [user_id, action.task_title]);
-
-          if (taskMatch.rows.length > 0 && Array.isArray(action.attachment_ids) && action.attachment_ids.length > 0) {
-            await query(
-              `UPDATE attachments SET task_id = $1, project_id = NULL
-               WHERE user_id = $2 AND id = ANY($3::uuid[])`,
-              [taskMatch.rows[0].id, user_id, action.attachment_ids]
-            );
-            executedActions.push({ type: 'attach_to_task', task_id: taskMatch.rows[0].id });
-          }
-        }
-      } catch (actionErr) {
-        console.error('Action execution error:', actionErr);
-      }
-    }
-
-    // Clean response text (strip action tags for display)
-    const cleanResponse = aiResponse.replace(/<action>[\s\S]*?<\/action>/g, '').trim();
-
-    // Save conversation
-    const newMessages = [
-      ...prevMessages,
-      { role: 'user', content: userMessage, attachment_ids: chatAttachments.map(a => a.id), timestamp: new Date().toISOString() },
-      { role: 'assistant', content: cleanResponse, actions: executedActions, timestamp: new Date().toISOString() }
-    ];
-
-    let convId;
-    if (conversation) {
-      await query('UPDATE ai_conversations SET messages = $1, updated_at = NOW() WHERE id = $2',
-        [JSON.stringify(newMessages), conversation.id]);
-      convId = conversation.id;
-    } else {
-      const convResult = await query(
-        'INSERT INTO ai_conversations (user_id, title, messages) VALUES ($1, $2, $3) RETURNING id',
-        [user_id, userMessage.slice(0, 100), JSON.stringify(newMessages)]
-      );
-      convId = convResult.rows[0].id;
-    }
-
-    res.json({
-      response: cleanResponse,
-      actions: executedActions,
-      conversation_id: convId
-    });
+    res.json(result);
   } catch (error) {
     console.error('AI chat error:', error);
+    if (error.status === 400) {
+      return res.status(400).json({ error: error.message });
+    }
     res.status(500).json({ error: 'Failed to process chat message' });
   }
 });

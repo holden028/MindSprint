@@ -7,6 +7,7 @@ const { parseLimit, parseOffset } = require('../utils/pagination');
 const { updatePriorities } = require('../services/priorities');
 const { createAutoReminders, syncTaskReminders } = require('../services/reminders');
 const { normalizeEmail, assignTask } = require('../services/sharing');
+const { postTaskToProjectChannel } = require('../services/slackNotify');
 
 const router = express.Router();
 
@@ -147,6 +148,14 @@ router.post('/', authenticateToken, async (req, res) => {
       );
     }
 
+    postTaskToProjectChannel({
+      projectId,
+      ownerUserId: user_id,
+      text: `New task: *${task.title}*${due_at ? ` · due ${new Date(due_at).toLocaleString()}` : ''}`,
+      taskId: task.id,
+      event: 'Created'
+    }).catch(() => {});
+
     updatePriorities(user_id, {
       trigger_type: 'task_added',
       trigger_data: { task_id: task.id, title: task.title }
@@ -243,6 +252,33 @@ async function updateTask(req, res) {
       syncTaskReminders(id).catch((err) =>
         console.error('Failed to update auto-reminders:', err)
       );
+      if (updates.due_at) {
+        postTaskToProjectChannel({
+          projectId: task.project_id,
+          ownerUserId: access.owner_id || user_id,
+          text: `Due updated: *${task.title}* → ${new Date(updates.due_at).toLocaleString()}`,
+          taskId: task.id,
+          event: 'Due'
+        }).catch(() => {});
+      }
+    }
+
+    if (updates.status === 'done') {
+      postTaskToProjectChannel({
+        projectId: task.project_id,
+        ownerUserId: access.owner_id || user_id,
+        text: `Done: ~~${task.title}~~`,
+        taskId: task.id,
+        event: 'Done'
+      }).catch(() => {});
+    } else if (updates.status === 'doing') {
+      postTaskToProjectChannel({
+        projectId: task.project_id,
+        ownerUserId: access.owner_id || user_id,
+        text: `In progress: *${task.title}*`,
+        taskId: task.id,
+        event: 'Doing'
+      }).catch(() => {});
     }
   } catch (error) {
     console.error('Update task error:', error);

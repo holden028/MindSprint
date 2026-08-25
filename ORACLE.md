@@ -180,6 +180,30 @@ First build takes several minutes on ARM.
 
 In the app: **Settings → App URL** → save `https://yourname.duckdns.org` (for Slack links).
 
+### Slack app (Events, Home Tab, workflows)
+
+After deploy, configure the Slack app at [api.slack.com/apps](https://api.slack.com/apps):
+
+1. **Event Subscriptions** → Request URL: `https://YOUR_DOMAIN/api/slack/events`  
+   Bot events: `message.im`, `app_mention`, `message.channels`, `app_home_opened`
+2. **App Home** → enable Home Tab
+3. **Slash Commands** → `/task` → `https://YOUR_DOMAIN/api/slack/commands`
+4. **Interactivity** → `https://YOUR_DOMAIN/api/slack/interactions`  
+   Global shortcut callback ID: `new_mindsprint_task`
+5. **OAuth scopes** (bot): `chat:write`, `im:history`, `im:write`, `app_mentions:read`, `channels:history`, `channels:read`, `groups:history`, `commands`, `users:read` — then reinstall
+6. Put **Signing Secret** and a random **Workflow secret** in `deploy/oracle/.env`:
+
+```env
+SLACK_SIGNING_SECRET=from-slack-basic-info
+SLACK_WORKFLOW_SECRET=openssl-rand-hex-32
+```
+
+Restart API/worker after env changes. In MindSprint Settings, paste Bot Token + Slack User ID.
+
+**Workflow Builder:** HTTP POST to `https://YOUR_DOMAIN/api/slack/workflows/create-task` with header `X-MindSprint-Workflow-Secret: <SLACK_WORKFLOW_SECRET>` and JSON `{ "title": "...", "channel_id": "C…", "slack_user_id": "U…" }` (or `project_id`).
+
+**Project channels:** Project page → Slack channel ID, or `/task link <project>` in the channel.
+
 ---
 
 ## Auto-deploy (GitHub → VM)

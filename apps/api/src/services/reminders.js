@@ -12,6 +12,16 @@ const AUTO_KINDS = [
   'deadline'
 ];
 
+const INTENSITY_KINDS = {
+  full: AUTO_KINDS,
+  medium: ['day_before', 'morning', 'start_by', 'hour_before', 'deadline'],
+  light: ['morning', 'hour_before', 'deadline']
+};
+
+function kindsForIntensity(intensity) {
+  return INTENSITY_KINDS[intensity] || INTENSITY_KINDS.full;
+}
+
 function roundMinute(date) {
   const d = new Date(date);
   d.setSeconds(0, 0);
@@ -20,6 +30,7 @@ function roundMinute(date) {
 
 /**
  * Build a persistent ADHD reminder ladder (dual-channel in_app + slack).
+ * Slack channel kinds honour the user's slack_enabled + slack_intensity prefs.
  */
 async function createAutoReminders(userId, taskId, dueDate, estMinutes = 30) {
   await query(
@@ -29,6 +40,14 @@ async function createAutoReminders(userId, taskId, dueDate, estMinutes = 30) {
        AND sent = false`,
     [taskId, userId, AUTO_KINDS]
   );
+
+  const prefsResult = await query(
+    `SELECT slack_enabled, slack_intensity FROM users WHERE id = $1`,
+    [userId]
+  );
+  const prefs = prefsResult.rows[0] || {};
+  const slackEnabled = prefs.slack_enabled !== false;
+  const slackKinds = new Set(kindsForIntensity(prefs.slack_intensity || 'full'));
 
   const now = new Date();
   const due = dueDate instanceof Date ? dueDate : new Date(dueDate);
@@ -64,11 +83,17 @@ async function createAutoReminders(userId, taskId, dueDate, estMinutes = 30) {
   add(due, 'deadline');
 
   for (const item of ladder) {
-    for (const channel of ['in_app', 'slack']) {
+    await query(
+      `INSERT INTO reminders (task_id, user_id, remind_at, channel, kind)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [taskId, userId, item.at, 'in_app', item.kind]
+    );
+
+    if (slackEnabled && slackKinds.has(item.kind)) {
       await query(
         `INSERT INTO reminders (task_id, user_id, remind_at, channel, kind)
          VALUES ($1, $2, $3, $4, $5)`,
-        [taskId, userId, item.at, channel, item.kind]
+        [taskId, userId, item.at, 'slack', item.kind]
       );
     }
   }
@@ -142,6 +167,8 @@ async function refreshAllAutoReminders(userId = null) {
 
 module.exports = {
   AUTO_KINDS,
+  INTENSITY_KINDS,
+  kindsForIntensity,
   createAutoReminders,
   refreshAllAutoReminders,
   syncTaskReminders,

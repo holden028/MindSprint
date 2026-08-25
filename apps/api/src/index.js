@@ -106,8 +106,21 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+function captureSlackRawBody(req, res, buf) {
+  if (req.originalUrl?.startsWith('/slack') && buf?.length) {
+    req.rawBody = buf;
+  }
+}
+
+app.use(express.json({
+  limit: '1mb',
+  verify: captureSlackRawBody
+}));
+app.use(express.urlencoded({
+  extended: true,
+  limit: '1mb',
+  verify: captureSlackRawBody
+}));
 
 app.get('/health', async (req, res) => {
   try {

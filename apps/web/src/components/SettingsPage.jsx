@@ -69,6 +69,13 @@ export default function SettingsPage() {
   const [botToken, setBotToken] = useState('');
   const [appBaseUrl, setAppBaseUrl] = useState('');
   const [timezone, setTimezone] = useState('Europe/London');
+  const [slackEnabled, setSlackEnabled] = useState(true);
+  const [slackIntensity, setSlackIntensity] = useState('full');
+  const [quietHoursStart, setQuietHoursStart] = useState(22);
+  const [quietHoursEnd, setQuietHoursEnd] = useState(7);
+  const [digestMorningHour, setDigestMorningHour] = useState(9);
+  const [digestEveningHour, setDigestEveningHour] = useState(18);
+  const [digestsEnabled, setDigestsEnabled] = useState(true);
   const [timezones] = useState(() => listTimezones());
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -107,6 +114,13 @@ export default function SettingsPage() {
           setTimezone('Europe/London');
         }
       }
+      if (data.slack_enabled !== undefined && data.slack_enabled !== null) setSlackEnabled(!!data.slack_enabled);
+      if (data.slack_intensity) setSlackIntensity(data.slack_intensity);
+      if (data.quiet_hours_start !== undefined && data.quiet_hours_start !== null) setQuietHoursStart(Number(data.quiet_hours_start));
+      if (data.quiet_hours_end !== undefined && data.quiet_hours_end !== null) setQuietHoursEnd(Number(data.quiet_hours_end));
+      if (data.digest_morning_hour !== undefined && data.digest_morning_hour !== null) setDigestMorningHour(Number(data.digest_morning_hour));
+      if (data.digest_evening_hour !== undefined && data.digest_evening_hour !== null) setDigestEveningHour(Number(data.digest_evening_hour));
+      if (data.digests_enabled !== undefined && data.digests_enabled !== null) setDigestsEnabled(!!data.digests_enabled);
     } catch {
       // settings may not exist yet
     } finally {
@@ -171,6 +185,13 @@ export default function SettingsPage() {
         slack_bot_token: botToken || null,
         app_base_url: appBaseUrl || null,
         timezone: timezone || 'Europe/London',
+        slack_enabled: slackEnabled,
+        slack_intensity: slackIntensity,
+        quiet_hours_start: quietHoursStart,
+        quiet_hours_end: quietHoursEnd,
+        digest_morning_hour: digestMorningHour,
+        digest_evening_hour: digestEveningHour,
+        digests_enabled: digestsEnabled,
       });
       setStatus({ type: 'success', msg: 'Settings saved!' });
     } catch (err) {
@@ -235,9 +256,11 @@ export default function SettingsPage() {
   };
 
     const apiBase = (() => {
+      const configured = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+      if (configured) return configured;
       const host = window.location.hostname;
       if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:8080';
-      return `${window.location.protocol}//${host}:8080`;
+      return `${window.location.protocol}//${host}/api`;
     })();
 
   const copyToClipboard = (text) => {
@@ -389,7 +412,7 @@ export default function SettingsPage() {
           Timezone
         </h3>
         <p className="text-sm text-white/50 mb-4">
-          Used for AI clock answers, morning digest (~9am), and quiet hours (22:00–07:00).
+          Used for AI clock answers, digests, and quiet hours (configurable below).
         </p>
         <label className="block text-sm font-medium text-white/70 mb-1.5">Your timezone</label>
         <select
@@ -469,6 +492,109 @@ export default function SettingsPage() {
             {status.msg}
           </div>
         )}
+      </div>
+
+      {/* Slack nag volume / digests / quiet hours */}
+      <div className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl p-6">
+        <h3 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
+          <Clock size={20} className="text-violet-400" />
+          Slack nags &amp; digests
+        </h3>
+        <p className="text-sm text-white/50 mb-4">
+          Control how often MindSprint pings you in Slack. In-app notifications are unchanged.
+        </p>
+
+        <label className="flex items-center gap-3 mb-4 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={slackEnabled}
+            onChange={(e) => setSlackEnabled(e.target.checked)}
+            className="rounded border-white/30 bg-white/10 text-violet-500 focus:ring-violet-500/40"
+          />
+          <span className="text-sm text-white/80">Enable Slack reminders (unmute)</span>
+        </label>
+
+        <label className="block text-sm font-medium text-white/70 mb-1.5">Nag intensity</label>
+        <select
+          value={slackIntensity}
+          onChange={(e) => setSlackIntensity(e.target.value)}
+          className="w-full backdrop-blur-sm bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-violet-500/50 mb-4 text-sm"
+        >
+          <option value="full" className="bg-slate-900">Full — all ladder steps</option>
+          <option value="medium" className="bg-slate-900">Medium — day before, morning, start-by, hour before, deadline</option>
+          <option value="light" className="bg-slate-900">Light — morning, hour before, deadline only</option>
+        </select>
+
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div>
+            <label className="block text-xs text-white/50 mb-1">Quiet hours start</label>
+            <input
+              type="number"
+              min={0}
+              max={23}
+              value={quietHoursStart}
+              onChange={(e) => setQuietHoursStart(Number(e.target.value))}
+              className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/50"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-white/50 mb-1">Quiet hours end</label>
+            <input
+              type="number"
+              min={0}
+              max={23}
+              value={quietHoursEnd}
+              onChange={(e) => setQuietHoursEnd(Number(e.target.value))}
+              className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/50"
+            />
+          </div>
+        </div>
+        <p className="text-xs text-white/40 mb-4">
+          Slack nags are skipped during quiet hours (deadlines still fire). Default 22→7 overnight.
+        </p>
+
+        <label className="flex items-center gap-3 mb-4 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={digestsEnabled}
+            onChange={(e) => setDigestsEnabled(e.target.checked)}
+            className="rounded border-white/30 bg-white/10 text-violet-500 focus:ring-violet-500/40"
+          />
+          <span className="text-sm text-white/80">Send morning &amp; evening digests</span>
+        </label>
+
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div>
+            <label className="block text-xs text-white/50 mb-1">Morning digest hour</label>
+            <input
+              type="number"
+              min={0}
+              max={23}
+              value={digestMorningHour}
+              onChange={(e) => setDigestMorningHour(Number(e.target.value))}
+              className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/50"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-white/50 mb-1">Evening digest hour</label>
+            <input
+              type="number"
+              min={0}
+              max={23}
+              value={digestEveningHour}
+              onChange={(e) => setDigestEveningHour(Number(e.target.value))}
+              className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/50"
+            />
+          </div>
+        </div>
+
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700 disabled:opacity-50 text-white px-6 py-2.5 rounded-xl transition-all text-sm font-medium"
+        >
+          {saving ? 'Saving...' : 'Save nag prefs'}
+        </button>
       </div>
 
       {/* Quick Setup — Webhook for Notifications */}
@@ -555,7 +681,7 @@ export default function SettingsPage() {
               <span className="text-xs bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded-full">Interactive</span>
             </h3>
             <p className="text-sm text-white/50 mt-0.5">
-              Set up slash commands (/task add, /task list, /task done) and interactive buttons
+              Events API, Home Tab, slash commands, modals, and interactive buttons
             </p>
           </div>
           {showGuide ? <ChevronUp className="text-white/50" size={20} /> : <ChevronDown className="text-white/50" size={20} />}
@@ -619,7 +745,7 @@ export default function SettingsPage() {
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-white/50">Usage hint:</span>
-                  <span className="text-white/70">[add|list|done|help]</span>
+                  <span className="text-white/70">[add|list|done|ask|due|link|help]</span>
                 </div>
               </div>
             </div>
@@ -628,7 +754,7 @@ export default function SettingsPage() {
             <div className="space-y-2">
               <h4 className="text-white font-medium flex items-center gap-2">
                 <span className="bg-purple-500/30 text-purple-200 text-xs px-2 py-0.5 rounded-full">Step 4</span>
-                Enable Interactive Messages
+                Enable Interactive Messages &amp; Shortcut
               </h4>
               <div className="text-sm text-white/60 space-y-1">
                 <p>Go to <strong className="text-white/80">Interactivity & Shortcuts</strong> &rarr; toggle ON.</p>
@@ -638,18 +764,26 @@ export default function SettingsPage() {
                 <code className="text-purple-300 text-sm">{apiBase}/slack/interactions</code>
                 <button onClick={() => copyToClipboard(`${apiBase}/slack/interactions`)} className="p-1 hover:bg-white/10 rounded"><Copy size={12} className="text-white/40" /></button>
               </div>
-              <p className="text-sm text-white/50">This enables the "Mark Done" buttons on task messages.</p>
+              <p className="text-sm text-white/50">Add a Global Shortcut with callback ID <code className="text-purple-300">new_mindsprint_task</code> (label: &quot;New MindSprint task&quot;).</p>
             </div>
 
             {/* Step 5 */}
             <div className="space-y-2">
               <h4 className="text-white font-medium flex items-center gap-2">
                 <span className="bg-purple-500/30 text-purple-200 text-xs px-2 py-0.5 rounded-full">Step 5</span>
-                Link Your Account
+                Event Subscriptions + App Home
               </h4>
               <div className="text-sm text-white/60 space-y-1">
-                <p>Find your Slack User ID: click your profile in Slack &rarr; click the three dots (...) &rarr; "Copy member ID".</p>
-                <p>Paste it in the "Your Slack User ID" field above and save.</p>
+                <p>Go to <strong className="text-white/80">Event Subscriptions</strong> &rarr; toggle ON. Request URL:</p>
+              </div>
+              <div className="bg-black/20 rounded-lg p-3 flex items-center justify-between mb-2">
+                <code className="text-purple-300 text-sm">{apiBase}/slack/events</code>
+                <button onClick={() => copyToClipboard(`${apiBase}/slack/events`)} className="p-1 hover:bg-white/10 rounded"><Copy size={12} className="text-white/40" /></button>
+              </div>
+              <div className="text-sm text-white/60 space-y-1">
+                <p>Subscribe to bot events: <code className="text-white/70">message.im</code>, <code className="text-white/70">app_mention</code>, <code className="text-white/70">message.channels</code>, <code className="text-white/70">app_home_opened</code>.</p>
+                <p>Under <strong className="text-white/80">App Home</strong>, enable the Home Tab.</p>
+                <p>From <strong className="text-white/80">Basic Information</strong>, copy the <strong className="text-white/80">Signing Secret</strong> into server env as <code className="text-white/70">SLACK_SIGNING_SECRET</code>.</p>
               </div>
             </div>
 
@@ -657,17 +791,41 @@ export default function SettingsPage() {
             <div className="space-y-2">
               <h4 className="text-white font-medium flex items-center gap-2">
                 <span className="bg-purple-500/30 text-purple-200 text-xs px-2 py-0.5 rounded-full">Step 6</span>
-                Install & Test
+                OAuth scopes
               </h4>
               <div className="text-sm text-white/60 space-y-1">
-                <p>Go to <strong className="text-white/80">Install App</strong> in the sidebar and click "Install to Workspace".</p>
-                <p>Once installed, try these commands in Slack:</p>
+                <p>Bot Token Scopes: <code className="text-white/70">chat:write</code>, <code className="text-white/70">im:history</code>, <code className="text-white/70">im:write</code>, <code className="text-white/70">app_mentions:read</code>, <code className="text-white/70">channels:history</code>, <code className="text-white/70">channels:read</code>, <code className="text-white/70">groups:history</code>, <code className="text-white/70">commands</code>, <code className="text-white/70">users:read</code>.</p>
+                <p>Reinstall the app after changing scopes.</p>
+              </div>
+            </div>
+
+            {/* Step 7 */}
+            <div className="space-y-2">
+              <h4 className="text-white font-medium flex items-center gap-2">
+                <span className="bg-purple-500/30 text-purple-200 text-xs px-2 py-0.5 rounded-full">Step 7</span>
+                Link Your Account
+              </h4>
+              <div className="text-sm text-white/60 space-y-1">
+                <p>Find your Slack User ID: click your profile in Slack &rarr; click the three dots (...) &rarr; &quot;Copy member ID&quot;.</p>
+                <p>Paste it in the &quot;Your Slack User ID&quot; field above, paste the Bot Token, and save.</p>
+              </div>
+            </div>
+
+            {/* Step 8 */}
+            <div className="space-y-2">
+              <h4 className="text-white font-medium flex items-center gap-2">
+                <span className="bg-purple-500/30 text-purple-200 text-xs px-2 py-0.5 rounded-full">Step 8</span>
+                Install &amp; Test
+              </h4>
+              <div className="text-sm text-white/60 space-y-1">
+                <p>Go to <strong className="text-white/80">Install App</strong> and click &quot;Install to Workspace&quot;.</p>
+                <p>Open the MindSprint Home Tab, DM the bot, or try:</p>
               </div>
               <div className="bg-black/20 rounded-lg p-3 text-sm space-y-1">
                 <p><code className="text-green-300">/task help</code> — see all commands</p>
-                <p><code className="text-green-300">/task add Buy groceries</code> — create a task</p>
-                <p><code className="text-green-300">/task list</code> — see your tasks</p>
-                <p><code className="text-green-300">/task done 1</code> — complete task #1</p>
+                <p><code className="text-green-300">/task add</code> — open create-task form</p>
+                <p><code className="text-green-300">/task ask what should I do next?</code></p>
+                <p><code className="text-green-300">/task link My Project</code> — in a channel</p>
               </div>
             </div>
 
@@ -675,19 +833,20 @@ export default function SettingsPage() {
             <div className="bg-amber-500/10 border border-amber-400/20 rounded-xl p-4">
               <p className="text-amber-200 text-sm font-medium mb-1">Note: Public URL Required</p>
               <p className="text-amber-200/60 text-xs">
-                Slash commands and interactive messages require Slack to reach your API server. 
-                For local development, use <a href="https://ngrok.com" target="_blank" rel="noopener" className="underline">ngrok</a> to 
-                expose your local server: <code className="text-amber-300">ngrok http 8080</code>, then use the ngrok URL 
-                as the base for your slash command and interactivity URLs. For production, use your real domain.
+                Events, slash commands, and interactive messages require Slack to reach your API.
+                For local development, use <a href="https://ngrok.com" target="_blank" rel="noopener" className="underline">ngrok</a> (
+                <code className="text-amber-300">ngrok http 8080</code>). For production, use your real HTTPS domain (e.g. DuckDNS).
               </p>
             </div>
 
             {/* Optional env vars */}
             <div className="space-y-2">
-              <h4 className="text-white font-medium text-sm">Optional: Server Environment Variables</h4>
+              <h4 className="text-white font-medium text-sm">Server environment variables</h4>
               <div className="bg-black/20 rounded-lg p-3 text-xs space-y-1 text-white/50">
-                <p><code className="text-white/70">SLACK_VERIFICATION_TOKEN</code> — from your Slack app's Basic Information page (adds request verification)</p>
-                <p><code className="text-white/70">FRONTEND_URL</code> — used in "Open in App" links (defaults to http://localhost:5174)</p>
+                <p><code className="text-white/70">SLACK_SIGNING_SECRET</code> — Basic Information → Signing Secret (required for Events/commands verification)</p>
+                <p><code className="text-white/70">SLACK_WORKFLOW_SECRET</code> — shared secret for Workflow Builder <code className="text-white/60">POST {apiBase}/slack/workflows/create-task</code></p>
+                <p><code className="text-white/70">SLACK_VERIFICATION_TOKEN</code> — legacy token (optional if Signing Secret is set)</p>
+                <p><code className="text-white/70">FRONTEND_URL</code> — used in Open links (defaults to http://localhost:5174)</p>
               </div>
             </div>
           </div>

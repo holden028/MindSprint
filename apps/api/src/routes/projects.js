@@ -75,7 +75,7 @@ router.patch('/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Only the owner can edit this project' });
     }
 
-    const allowedFields = ['title', 'description', 'tags', 'ai_analysis'];
+    const allowedFields = ['title', 'description', 'tags', 'ai_analysis', 'slack_channel_id', 'slack_channel_name'];
     const { updateFields, values, nextParam } = patchRow(updates, allowedFields);
 
     if (updateFields.length === 0) {
