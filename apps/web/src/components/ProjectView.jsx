@@ -6,6 +6,7 @@ import ManualTaskModal from './ManualTaskModal';
 import { ArrowLeft, Clock, Flag, Trash2, Target, Plus, Repeat, LayoutTemplate } from 'lucide-react';
 import { getPriorityColor } from '../utils/colors';
 import ShareInvite from './ShareInvite';
+import AttachmentsPanel from './AttachmentsPanel';
 
 export default function ProjectView() {
   const { projectId } = useParams();
@@ -143,6 +144,10 @@ export default function ProjectView() {
 
           <div className="mt-6">
             <ShareInvite projectId={project.id} canShare={!project.is_shared} />
+          </div>
+
+          <div className="mt-6">
+            <AttachmentsPanel projectId={project.id} canEdit={!project.is_shared} />
           </div>
 
           <div className="mt-4">

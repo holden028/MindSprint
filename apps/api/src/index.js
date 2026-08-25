@@ -28,6 +28,7 @@ const notificationRoutes = require('./routes/notifications');
 const slackRoutes = require('./routes/slack');
 const scheduleRoutes = require('./routes/schedule');
 const shareRoutes = require('./routes/shares');
+const attachmentRoutes = require('./routes/attachments');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -135,6 +136,7 @@ app.use('/notifications', notificationRoutes);
 app.use('/slack', slackRoutes);
 app.use('/schedule', scheduleRoutes);
 app.use('/shares', shareRoutes);
+app.use('/attachments', attachmentRoutes);
 
 app.use((err, req, res, next) => {
   console.error('Error:', err);

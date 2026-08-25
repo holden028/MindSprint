@@ -34,6 +34,8 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
       - AI_MODEL=${AI_MODEL}
       - MIGRATIONS_DIR=/sql/migrations
+      - UPLOAD_DIR=/app/uploads
+      - MAX_UPLOAD_BYTES=10485760
       - TZ=Europe/London
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5174}
     depends_on:
@@ -42,6 +44,7 @@ services:
     volumes:
       - ./apps/api:/app
       - ./sql:/sql:ro
+      - uploads_data:/app/uploads
       - /app/node_modules
 
   worker:
@@ -76,3 +79,4 @@ services:
 
 volumes:
   postgres_data:
+  uploads_data:

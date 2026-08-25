@@ -484,7 +484,7 @@ Rules:
 // --- AI Chat Assistant ---
 
 async function getFullUserContext(userId) {
-  const [tasksResult, projectsResult, blocksResult, sessionsResult, userResult] = await Promise.all([
+  const [tasksResult, projectsResult, blocksResult, sessionsResult, userResult, attachmentsResult] = await Promise.all([
     query(`
       SELECT t.id, t.title, t.description, t.status, t.priority, t.urgency, t.est_minutes, t.due_at, p.title as project_title
       FROM tasks t JOIN projects p ON t.project_id = p.id
@@ -500,7 +500,16 @@ async function getFullUserContext(userId) {
       WHERE s.user_id = $1 AND s.completed = true
       ORDER BY s.started_at DESC LIMIT 10
     `, [userId]),
-    query('SELECT timezone FROM users WHERE id = $1', [userId])
+    query('SELECT timezone FROM users WHERE id = $1', [userId]),
+    query(`
+      SELECT a.id, a.filename, a.mime_type, a.ai_summary, t.title as task_title, p.title as project_title
+      FROM attachments a
+      LEFT JOIN tasks t ON a.task_id = t.id
+      LEFT JOIN projects p ON a.project_id = p.id
+      WHERE a.user_id = $1
+      ORDER BY a.created_at DESC
+      LIMIT 25
+    `, [userId])
   ]);
 
   const { formatNowInTimezone } = require('../utils/timezone');
@@ -529,11 +538,22 @@ async function getFullUserContext(userId) {
     `- ${s.task_title || 'Unnamed'}: planned ${s.duration_minutes}min, actual ${s.actual_duration_minutes || '?'}min, rating ${s.self_rating || '?'}/10`
   ).join('\n');
 
+  const attachmentList = attachmentsResult.rows.map(a => {
+    const linked = a.task_title
+      ? `task: ${a.task_title}`
+      : a.project_title
+        ? `project: ${a.project_title}`
+        : 'unlinked';
+    const summary = a.ai_summary ? `\n  Content: ${a.ai_summary.slice(0, 500)}` : '';
+    return `- [${a.id.slice(0, 8)}] "${a.filename}" (${a.mime_type}, ${linked})${summary}`;
+  }).join('\n');
+
   return {
     taskList,
     projectList,
     scheduleList,
     sessionHistory,
+    attachmentList,
     now: nowLabel,
     timezone: timeZone,
     projects: projectsResult.rows
@@ -543,11 +563,32 @@ async function getFullUserContext(userId) {
 router.post('/chat', authenticateToken, async (req, res) => {
   try {
     const { user_id } = req.user;
-    const { message, conversation_id } = req.body;
+    const { message, conversation_id, attachment_ids: attachmentIds = [] } = req.body;
 
-    if (!message?.trim()) return res.status(400).json({ error: 'Message is required' });
+    if (!message?.trim() && (!Array.isArray(attachmentIds) || attachmentIds.length === 0)) {
+      return res.status(400).json({ error: 'Message or attachment is required' });
+    }
 
-    const { taskList, projectList, scheduleList, sessionHistory, now, timezone, projects } = await getFullUserContext(user_id);
+    const userMessage = message?.trim() || 'Please review the attached file(s).';
+
+    const { taskList, projectList, scheduleList, sessionHistory, attachmentList, now, timezone, projects } = await getFullUserContext(user_id);
+
+    let chatAttachments = [];
+    if (Array.isArray(attachmentIds) && attachmentIds.length > 0) {
+      const attResult = await query(
+        `SELECT id, filename, mime_type, ai_summary, task_id, project_id
+         FROM attachments
+         WHERE user_id = $1 AND id = ANY($2::uuid[])`,
+        [user_id, attachmentIds]
+      );
+      chatAttachments = attResult.rows;
+    }
+
+    const chatAttachmentContext = chatAttachments.length > 0
+      ? `\nATTACHMENTS IN THIS MESSAGE:\n${chatAttachments.map(a =>
+          `- "${a.filename}" (${a.mime_type})${a.ai_summary ? `\n  ${a.ai_summary}` : ''}`
+        ).join('\n')}\n`
+      : '';
 
     // Load or create conversation
     let conversation;
@@ -573,12 +614,16 @@ ${scheduleList || 'No blocked time set.'}
 RECENT SESSIONS:
 ${sessionHistory || 'No session history.'}
 
+ATTACHMENTS (files the user has uploaded — use their content when relevant):
+${attachmentList || 'No attachments yet.'}
+${chatAttachmentContext}
+
 ${historyContext ? `CONVERSATION HISTORY:\n${historyContext}\n` : ''}
 
 You can perform ACTIONS by including a JSON block in your response wrapped in <action>...</action> tags. Available actions:
 
 1. Create a task:
-<action>{"type":"create_task","title":"...","description":"...","est_minutes":30,"priority":3,"urgency":3,"due_at":"ISO date or null","project_title":"existing project name or null"}</action>
+<action>{"type":"create_task","title":"...","description":"...","est_minutes":30,"priority":3,"urgency":3,"due_at":"ISO date or null","project_title":"existing project name or null","attachment_ids":["uuid"]}</action>
 
 2. Update a task:
 <action>{"type":"update_task","task_title":"exact existing task title","updates":{"status":"done","priority":4,"due_at":"ISO date"}}</action>
@@ -594,8 +639,12 @@ IMPORTANT — DUE DATES:
 4. Plan the day — suggest an ordered schedule of tasks to work on:
 <action>{"type":"plan_day"}</action>
 
+5. Link attachments to an existing task:
+<action>{"type":"attach_to_task","task_title":"exact task title","attachment_ids":["uuid"]}</action>
+
 RULES:
-- Be concise and helpful. Use short paragraphs, not walls of text.
+- When the user shares attachments, read their summaries and reference them in your answer.
+- When creating a task from an attached file, include attachment_ids from the message.
 - When the user asks to create a task, extract all details and create it. Confirm what you created.
 - When asked "what should I work on" or "plan my day", consider deadlines, priority, urgency, estimated time, blocked time, and recent session patterns.
 - For day planning, account for the user's blocked time and suggest realistic scheduling.
@@ -609,7 +658,7 @@ RULES:
       model: process.env.AI_MODEL || 'gpt-4o-mini',
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: message }
+        { role: 'user', content: userMessage }
       ],
       temperature: 0.5,
       max_tokens: 2000
@@ -651,6 +700,20 @@ RULES:
           ]);
 
           const task = taskResult.rows[0];
+
+          if (Array.isArray(action.attachment_ids) && action.attachment_ids.length > 0) {
+            await query(
+              `UPDATE attachments SET task_id = $1, project_id = NULL
+               WHERE user_id = $2 AND id = ANY($3::uuid[])`,
+              [task.id, user_id, action.attachment_ids]
+            );
+          } else if (chatAttachments.length > 0) {
+            await query(
+              `UPDATE attachments SET task_id = $1, project_id = NULL
+               WHERE user_id = $2 AND id = ANY($3::uuid[])`,
+              [task.id, user_id, chatAttachments.map(a => a.id)]
+            );
+          }
 
           // Auto-create typed reminder ladder if due_at set
           if (action.due_at) {
@@ -700,6 +763,20 @@ RULES:
           executedActions.push({ type: 'create_time_block', block: blockResult.rows[0] });
         } else if (action.type === 'plan_day') {
           executedActions.push({ type: 'plan_day' });
+        } else if (action.type === 'attach_to_task' && action.task_title) {
+          const taskMatch = await query(`
+            SELECT t.id FROM tasks t JOIN projects p ON t.project_id = p.id
+            WHERE p.user_id = $1 AND LOWER(t.title) = LOWER($2) LIMIT 1
+          `, [user_id, action.task_title]);
+
+          if (taskMatch.rows.length > 0 && Array.isArray(action.attachment_ids) && action.attachment_ids.length > 0) {
+            await query(
+              `UPDATE attachments SET task_id = $1, project_id = NULL
+               WHERE user_id = $2 AND id = ANY($3::uuid[])`,
+              [taskMatch.rows[0].id, user_id, action.attachment_ids]
+            );
+            executedActions.push({ type: 'attach_to_task', task_id: taskMatch.rows[0].id });
+          }
         }
       } catch (actionErr) {
         console.error('Action execution error:', actionErr);
@@ -712,7 +789,7 @@ RULES:
     // Save conversation
     const newMessages = [
       ...prevMessages,
-      { role: 'user', content: message, timestamp: new Date().toISOString() },
+      { role: 'user', content: userMessage, attachment_ids: chatAttachments.map(a => a.id), timestamp: new Date().toISOString() },
       { role: 'assistant', content: cleanResponse, actions: executedActions, timestamp: new Date().toISOString() }
     ];
 
@@ -724,7 +801,7 @@ RULES:
     } else {
       const convResult = await query(
         'INSERT INTO ai_conversations (user_id, title, messages) VALUES ($1, $2, $3) RETURNING id',
-        [user_id, message.slice(0, 100), JSON.stringify(newMessages)]
+        [user_id, userMessage.slice(0, 100), JSON.stringify(newMessages)]
       );
       convId = convResult.rows[0].id;
     }

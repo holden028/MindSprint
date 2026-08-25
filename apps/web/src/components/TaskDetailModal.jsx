@@ -6,6 +6,7 @@ import {
 import Modal from './Modal';
 import ReminderPicker from './ReminderPicker';
 import ShareInvite from './ShareInvite';
+import AttachmentsPanel from './AttachmentsPanel';
 import api from '../services/api';
 import { getUrgencyColor } from '../utils/colors';
 import { formatDue, toDatetimeLocal } from '../utils/deadlines';
@@ -343,6 +344,8 @@ export default function TaskDetailModal({ task: initialTask, onClose, onStartSes
           )}
         </div>
       </div>
+
+      <AttachmentsPanel taskId={task.id} canEdit={canEdit} />
 
       {/* Metadata */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">

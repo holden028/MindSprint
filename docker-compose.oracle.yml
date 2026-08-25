@@ -48,8 +48,12 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.groq.com/openai/v1}
       AI_MODEL: ${AI_MODEL:-openai/gpt-oss-120b}
       MIGRATIONS_DIR: /sql/migrations
+      UPLOAD_DIR: /app/uploads
+      MAX_UPLOAD_BYTES: "10485760"
       TZ: ${TZ:-Europe/London}
       FRONTEND_URL: ${FRONTEND_URL}
+    volumes:
+      - uploads_data:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -129,5 +133,6 @@ networks:
 
 volumes:
   postgres_data:
+  uploads_data:
   caddy_data:
   caddy_config:

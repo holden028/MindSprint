@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageCircle, X, Send, Sparkles, CheckCircle, Plus, Calendar, Zap, ChevronDown } from 'lucide-react';
+import { MessageCircle, X, Send, Sparkles, CheckCircle, Plus, Calendar, Zap, ChevronDown, Paperclip, Loader } from 'lucide-react';
 import api from '../services/api';
+import { uploadChatAttachment } from './AttachmentsPanel';
 
 const QUICK_PROMPTS = [
   { label: 'Plan my day', icon: Calendar, prompt: 'Plan my day — look at my tasks, deadlines, and schedule and suggest what I should work on and when.' },
@@ -33,8 +34,11 @@ export default function AIChatPanel() {
   const [conversationId, setConversationId] = useState(null);
   const [conversations, setConversations] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [pendingAttachments, setPendingAttachments] = useState([]);
+  const [uploadingFile, setUploadingFile] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     if (isOpen && conversations.length === 0) {
@@ -51,17 +55,28 @@ export default function AIChatPanel() {
   }, [isOpen]);
 
   const sendMessage = async (text) => {
-    if (!text?.trim() || loading) return;
+    const trimmed = text?.trim();
+    if ((!trimmed && pendingAttachments.length === 0) || loading) return;
 
-    const userMsg = { role: 'user', content: text, timestamp: new Date().toISOString() };
+    const messageText = trimmed || 'Please review the attached file(s).';
+
+    const attachmentIds = pendingAttachments.map((a) => a.id);
+    const userMsg = {
+      role: 'user',
+      content: messageText,
+      attachments: [...pendingAttachments],
+      timestamp: new Date().toISOString()
+    };
     setMessages(prev => [...prev, userMsg]);
     setInput('');
+    setPendingAttachments([]);
     setLoading(true);
 
     try {
       const { data } = await api.post('/ai/chat', {
-        message: text,
-        conversation_id: conversationId
+        message: messageText,
+        conversation_id: conversationId,
+        attachment_ids: attachmentIds
       });
 
       const assistantMsg = {
@@ -81,6 +96,26 @@ export default function AIChatPanel() {
       }]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingFile(true);
+    try {
+      const attachment = await uploadChatAttachment(file);
+      setPendingAttachments((prev) => [...prev, attachment]);
+    } catch {
+      setMessages((prev) => [...prev, {
+        role: 'assistant',
+        content: 'Could not upload that file. Try a smaller image or text file (max 10MB).',
+        error: true,
+        timestamp: new Date().toISOString()
+      }]);
+    } finally {
+      setUploadingFile(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -188,6 +223,15 @@ export default function AIChatPanel() {
                   : 'bg-white/10 text-white/90 rounded-bl-md'
             }`}>
               <div className="whitespace-pre-wrap">{msg.content}</div>
+              {msg.attachments?.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {msg.attachments.map((a) => (
+                    <div key={a.id} className="text-[10px] text-white/50 flex items-center gap-1">
+                      <Paperclip size={10} /> {a.filename}
+                    </div>
+                  ))}
+                </div>
+              )}
               {msg.actions?.map((action, j) => (
                 action.type === 'create_task' && action.task ? (
                   <TaskCard key={j} task={action.task} />
@@ -226,7 +270,34 @@ export default function AIChatPanel() {
 
       {/* Input */}
       <div className="px-3 py-3 border-t border-white/10">
+        {pendingAttachments.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {pendingAttachments.map((a) => (
+              <span key={a.id} className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-500/20 border border-purple-400/30 rounded-full text-[10px] text-white/70">
+                <Paperclip size={10} />
+                {a.filename}
+                <button
+                  type="button"
+                  onClick={() => setPendingAttachments((prev) => prev.filter((x) => x.id !== a.id))}
+                  className="text-white/40 hover:text-white"
+                >
+                  <X size={10} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="flex items-end gap-2">
+          <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelect} />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadingFile || loading}
+            className="p-2.5 bg-white/10 border border-white/20 hover:bg-white/15 disabled:opacity-30 text-white/60 hover:text-white rounded-xl transition-all shrink-0"
+            title="Attach file"
+          >
+            {uploadingFile ? <Loader size={16} className="animate-spin" /> : <Paperclip size={16} />}
+          </button>
           <textarea
             ref={inputRef}
             value={input}
@@ -239,7 +310,7 @@ export default function AIChatPanel() {
           />
           <button
             onClick={() => sendMessage(input)}
-            disabled={!input.trim() || loading}
+            disabled={(!input.trim() && pendingAttachments.length === 0) || loading}
             className="p-2.5 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 disabled:opacity-30 text-white rounded-xl transition-all shrink-0"
           >
             <Send size={16} />
