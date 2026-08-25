@@ -2,6 +2,7 @@ const express = require('express');
 const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { taskVisibleSql, projectVisibleSql, taskAccessSelectSql, withTaskAccessFlags } = require('../utils/access');
+const { getSuggestions } = require('../services/learning');
 
 const router = express.Router();
 
@@ -179,6 +180,16 @@ router.get('/today', authenticateToken, async (req, res) => {
       if (plan.length >= 8) break;
     }
 
+    let learningTip = null;
+    let suggestedEnvironment = {};
+    try {
+      const suggestions = await getSuggestions(user_id);
+      learningTip = suggestions.tip;
+      suggestedEnvironment = suggestions.environment || {};
+    } catch (err) {
+      console.error('Dashboard learning tip error:', err.message);
+    }
+
     res.json({
       tasks: annotated,
       projects: projectsResult.rows,
@@ -188,7 +199,9 @@ router.get('/today', authenticateToken, async (req, res) => {
         due_today: dueToday,
         start_today: startToday,
         plan,
-        plan_minutes: plan.reduce((s, t) => s + (t.est_minutes || 30), 0)
+        plan_minutes: plan.reduce((s, t) => s + (t.est_minutes || 30), 0),
+        learning_tip: learningTip,
+        suggested_environment: suggestedEnvironment
       }
     });
   } catch (error) {

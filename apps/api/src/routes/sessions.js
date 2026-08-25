@@ -3,6 +3,7 @@ const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { assertTaskAccess } = require('../utils/access');
 const { parseLimit, parseOffset } = require('../utils/pagination');
+const { recordSessionEnd } = require('../services/learning');
 
 const router = express.Router();
 
@@ -82,7 +83,19 @@ router.post('/end', authenticateToken, async (req, res) => {
       session_id
     ]);
 
-    res.json({ message: 'Session ended successfully' });
+    let learning = null;
+    try {
+      learning = await recordSessionEnd(user_id, session_id);
+    } catch (err) {
+      console.error('Learning profile update failed:', err.message);
+    }
+
+    res.json({
+      message: 'Session ended successfully',
+      learning: learning
+        ? { tip: learning.best_tip, sampleCount: learning.sample_count }
+        : null
+    });
   } catch (error) {
     console.error('End session error:', error);
     res.status(500).json({ error: 'Failed to end session' });

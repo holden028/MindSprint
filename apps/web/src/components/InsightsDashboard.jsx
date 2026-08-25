@@ -39,16 +39,28 @@ export default function InsightsDashboard() {
 
   const bestTimeOfDay = insights?.bestTimeOfDay || { hour: 14, sessions: 0 };
   const bestEnvironment = insights?.bestEnvironment || { environment: 'None', avgRating: 0 };
-  const avgEnergy = insights?.avgEnergy || 3;
-  const avgFocus = insights?.avgFocus || 3;
+  const avgEnergy = insights?.avgEnergy ?? 3;
+  const avgFocus = insights?.avgFocus ?? 3;
   const topDistraction = insights?.topDistraction || { type: 'None', count: 0 };
 
   return (
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
           <h2 className="text-3xl font-bold text-white mb-2">Productivity Insights</h2>
-          <p className="text-white/60">Understand your patterns and optimize your workflow</p>
+          <p className="text-white/60">Learned from your focus sessions — what actually helps you</p>
         </div>
+
+        {insights?.tip && (
+          <div className="mb-8 rounded-2xl border border-emerald-400/25 bg-emerald-500/10 px-5 py-4">
+            <div className="text-emerald-200 text-sm font-semibold mb-1 flex items-center gap-2">
+              <Brain size={18} /> Your focus profile
+              {insights.sampleCount != null && (
+                <span className="text-emerald-200/60 font-normal">· {insights.sampleCount} sessions</span>
+              )}
+            </div>
+            <p className="text-emerald-50/95 leading-relaxed">{insights.tip}</p>
+          </div>
+        )}
 
         {/* Key Metrics */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -65,7 +77,11 @@ export default function InsightsDashboard() {
                 </div>
               </div>
             </div>
-            <p className="text-white/50 text-xs">Most productive hour</p>
+            <p className="text-white/50 text-xs">
+              {bestTimeOfDay.sessions
+                ? `${bestTimeOfDay.sessions} sessions · avg ${(bestTimeOfDay.avgRating || 0).toFixed(1)}/10`
+                : 'Most productive hour'}
+            </p>
           </div>
 
           {/* Average Energy */}

@@ -3,6 +3,12 @@ const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { normalizeAppBaseUrl } = require('../utils/appBaseUrl');
 const { normalizeTimezone } = require('../utils/timezone');
+const {
+  getRecommendations,
+  getLearningInsights,
+  getSuggestions,
+  rebuildProfile
+} = require('../services/learning');
 
 const router = express.Router();
 
@@ -43,136 +49,53 @@ router.get('/stats', authenticateToken, async (req, res) => {
   }
 });
 
-// Get AI recommendations
+// Get learning recommendations
 router.get('/recommendations', authenticateToken, async (req, res) => {
   try {
     const { user_id } = req.user;
-
-    const recentSessions = await query(`
-      SELECT mode, environment, self_rating
-      FROM sessions
-      WHERE user_id = $1 AND completed = true
-      ORDER BY started_at DESC
-      LIMIT 20
-    `, [user_id]);
-
-    const recommendations = [];
-
-    if (recentSessions.rows.length > 0) {
-      const avgRating = recentSessions.rows.reduce((sum, s) => sum + (s.self_rating || 0), 0) / recentSessions.rows.length;
-
-      if (avgRating < 5) {
-        recommendations.push({
-          type: 'environment',
-          message: 'Try adjusting your environment settings for better focus'
-        });
-      }
-
-      recommendations.push({
-        type: 'general',
-        message: 'Keep up the great work! You\'ve completed ' + recentSessions.rows.length + ' sessions'
-      });
-    }
-
-    res.json({ recommendations });
+    const data = await getRecommendations(user_id);
+    res.json(data);
   } catch (error) {
     console.error('Get recommendations error:', error);
     res.status(500).json({ error: 'Failed to load recommendations' });
   }
 });
 
-// Get productivity insights
+// Suggested environment toggles for next focus session
+router.get('/suggestions', authenticateToken, async (req, res) => {
+  try {
+    const { user_id } = req.user;
+    const estMinutes = req.query.est_minutes ? parseInt(req.query.est_minutes, 10) : undefined;
+    const suggestions = await getSuggestions(user_id, { estMinutes });
+    res.json(suggestions);
+  } catch (error) {
+    console.error('Get suggestions error:', error);
+    res.status(500).json({ error: 'Failed to load suggestions' });
+  }
+});
+
+// Rebuild learning profile from all past sessions
+router.post('/learning/rebuild', authenticateToken, async (req, res) => {
+  try {
+    const { user_id } = req.user;
+    const profile = await rebuildProfile(user_id);
+    res.json({
+      tip: profile.best_tip,
+      sampleCount: profile.sample_count,
+      message: 'Focus profile rebuilt from your session history'
+    });
+  } catch (error) {
+    console.error('Rebuild learning error:', error);
+    res.status(500).json({ error: 'Failed to rebuild learning profile' });
+  }
+});
+
+// Get productivity insights (learning engine)
 router.get('/insights', authenticateToken, async (req, res) => {
   try {
     const { user_id } = req.user;
-
-    const [hourlyPerf, envPerf, avgMetrics, distractions] = await Promise.all([
-      query(`
-        SELECT
-          EXTRACT(HOUR FROM started_at) as hour,
-          AVG(self_rating) as avg_rating,
-          COUNT(*) as sessions
-        FROM sessions
-        WHERE user_id = $1 AND self_rating IS NOT NULL AND completed = true
-        GROUP BY EXTRACT(HOUR FROM started_at)
-        ORDER BY hour
-      `, [user_id]),
-      query(`
-        SELECT
-          environment::text as environment,
-          AVG(self_rating) as avg_rating,
-          COUNT(*) as sessions
-        FROM sessions
-        WHERE user_id = $1 AND self_rating IS NOT NULL AND completed = true AND environment IS NOT NULL
-        GROUP BY environment
-        ORDER BY avg_rating DESC
-      `, [user_id]),
-      query(`
-        SELECT
-          AVG(energy_level) as avg_energy,
-          AVG(focus_quality) as avg_focus
-        FROM sessions
-        WHERE user_id = $1 AND completed = true
-      `, [user_id]),
-      query(`
-        SELECT
-          jsonb_array_elements_text(distractions) as type,
-          COUNT(*) as count
-        FROM sessions
-        WHERE user_id = $1 AND jsonb_typeof(distractions) = 'array' AND completed = true
-        GROUP BY type
-        ORDER BY count DESC
-      `, [user_id])
-    ]);
-
-    const bestTime = hourlyPerf.rows.length > 0
-      ? hourlyPerf.rows.reduce((best, curr) =>
-          parseFloat(curr.avg_rating) > parseFloat(best.avg_rating) ? curr : best
-        )
-      : { hour: 14, avg_rating: 0, sessions: 0 };
-
-    const totalDistractions = distractions.rows.reduce((sum, d) => sum + parseInt(d.count), 0);
-    const distractionAnalysis = distractions.rows.map(d => ({
-      type: d.type,
-      count: parseInt(d.count),
-      percentage: totalDistractions > 0 ? (parseInt(d.count) / totalDistractions * 100).toFixed(1) : 0
-    }));
-
-    const recommendations = [];
-    if (bestTime.sessions > 5) {
-      recommendations.push(`Your most productive time is ${bestTime.hour}:00-${parseInt(bestTime.hour) + 1}:00. Schedule important tasks then!`);
-    }
-    if (envPerf.rows.length > 0) {
-      recommendations.push(`You work best in: ${envPerf.rows[0].environment}. Try to replicate this environment!`);
-    }
-    if (avgMetrics.rows[0]?.avg_energy < 3) {
-      recommendations.push(`Your energy levels are low. Consider taking more breaks and getting better sleep.`);
-    }
-    if (distractionAnalysis.length > 0) {
-      recommendations.push(`${distractionAnalysis[0].type} is your top distraction. Try removing it during focus sessions.`);
-    }
-
-    res.json({
-      hourlyPerformance: hourlyPerf.rows.map(r => ({
-        hour: parseInt(r.hour),
-        avgRating: parseFloat(r.avg_rating),
-        sessions: parseInt(r.sessions)
-      })),
-      bestTimeOfDay: {
-        hour: parseInt(bestTime.hour),
-        sessions: parseInt(bestTime.sessions)
-      },
-      environmentPerformance: envPerf.rows.map(r => ({
-        environment: r.environment,
-        avgRating: parseFloat(r.avg_rating),
-        sessions: parseInt(r.sessions)
-      })),
-      avgEnergy: parseFloat(avgMetrics.rows[0]?.avg_energy || 3),
-      avgFocus: parseFloat(avgMetrics.rows[0]?.avg_focus || 3),
-      distractionAnalysis,
-      topDistraction: distractionAnalysis[0] || { type: 'None', count: 0 },
-      recommendations
-    });
+    const insights = await getLearningInsights(user_id);
+    res.json(insights);
   } catch (error) {
     console.error('Get insights error:', error);
     res.status(500).json({ error: 'Failed to load insights' });

@@ -7,7 +7,7 @@ import SessionCompletionModal from './SessionCompletionModal';
 import TimerDisplay from './TimerDisplay';
 import LoadingSpinner from './LoadingSpinner';
 import { getEnvIcon } from '../utils/iconMap';
-import { Music, Moon, Volume2, Smartphone, ChevronDown, ChevronRight, Zap, Clock, Target, Plus } from 'lucide-react';
+import { Music, Moon, Volume2, Smartphone, ChevronDown, ChevronRight, Zap, Clock, Target, Plus, Brain } from 'lucide-react';
 
 export default function FocusSession() {
   const [searchParams] = useSearchParams();
@@ -35,6 +35,8 @@ export default function FocusSession() {
   const [quickWins, setQuickWins] = useState([]);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [startTime, setStartTime] = useState(null);
+  const [learningTip, setLearningTip] = useState(null);
+  const [learningConfidence, setLearningConfidence] = useState('low');
 
   useEffect(() => {
     if (selectedTask?.est_minutes && !isRunning) {
@@ -45,10 +47,14 @@ export default function FocusSession() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [tasksRes, projectsRes, envRes] = await Promise.all([
+        const est = selectedTask?.est_minutes;
+        const [tasksRes, projectsRes, envRes, suggestRes] = await Promise.all([
           api.get('/tasks'),
           api.get('/projects'),
-          api.get('/custom-environments').catch(() => ({ data: { environments: [] } }))
+          api.get('/custom-environments').catch(() => ({ data: { environments: [] } })),
+          api.get('/profile/suggestions', {
+            params: est ? { est_minutes: est } : undefined
+          }).catch(() => ({ data: null }))
         ]);
 
         const incompleteTasks = (tasksRes.data.tasks || []).filter((t) => t.status !== 'done');
@@ -56,6 +62,14 @@ export default function FocusSession() {
         setProjects(projectsRes.data.projects || []);
         setCustomEnvironments(envRes.data.environments || []);
         calculateQuickWins(incompleteTasks);
+
+        if (suggestRes.data?.tip) {
+          setLearningTip(suggestRes.data.tip);
+          setLearningConfidence(suggestRes.data.confidence || 'low');
+        }
+        if (suggestRes.data?.environment && Object.keys(suggestRes.data.environment).length > 0) {
+          setEnvironment((prev) => ({ ...prev, ...suggestRes.data.environment }));
+        }
 
         const taskId = searchParams.get('taskId');
         if (taskId) {
@@ -242,6 +256,23 @@ export default function FocusSession() {
             Custom
           </button>
         </div>
+
+        {learningTip && (
+          <div className="mb-4 rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+            <div className="font-semibold text-emerald-200 mb-1 flex items-center gap-2">
+              <Brain size={16} />
+              Learned for you
+              {learningConfidence !== 'low' && (
+                <span className="text-[10px] uppercase tracking-wide text-emerald-200/70">
+                  {learningConfidence} confidence
+                </span>
+              )}
+            </div>
+            <p className="text-emerald-100/90 leading-relaxed">{learningTip}</p>
+            <p className="text-emerald-100/50 text-xs mt-2">Suggested toggles are pre-selected — change anything you like.</p>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
             { key: 'music', icon: Music, label: 'Music' },

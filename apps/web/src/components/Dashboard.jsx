@@ -9,7 +9,7 @@ import ManualTaskModal from './ManualTaskModal';
 import ManualProjectModal from './ManualProjectModal';
 import {
   Plus, LayoutGrid, List, Trash2, FolderPlus, Target,
-  AlertTriangle, CalendarClock, Clock, Zap
+  AlertTriangle, CalendarClock, Clock, Zap, Brain
 } from 'lucide-react';
 import { formatDue, deadlineBadge } from '../utils/deadlines';
 
@@ -149,6 +149,16 @@ export default function Dashboard() {
             </button>
           </div>
         </div>
+
+        {today?.learning_tip && (
+          <div className="mb-6 rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-4 py-3 flex gap-3 items-start">
+            <Brain className="text-emerald-300 shrink-0 mt-0.5" size={18} />
+            <div>
+              <div className="text-emerald-200 text-sm font-semibold mb-0.5">Focus tip</div>
+              <p className="text-emerald-100/90 text-sm leading-relaxed">{today.learning_tip}</p>
+            </div>
+          </div>
+        )}
 
         {/* Deadline signals */}
         {today && (today.overdue?.length > 0 || today.due_today?.length > 0 || today.start_today?.length > 0) && (
