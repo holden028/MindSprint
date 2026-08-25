@@ -745,8 +745,9 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
     if (!actions || actions.length === 0) return res.send('');
 
     const action = actions[0];
+    const actionId = parseActionId(action.action_id);
 
-    switch (action.action_id) {
+    switch (actionId) {
       case 'task_done': {
         const task = await findAccessibleTask(action.value, dbUser.id);
         if (!task) {
