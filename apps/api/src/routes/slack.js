@@ -105,6 +105,44 @@ async function publishHome(user) {
   }
 }
 
+async function getWorkspaceBotToken() {
+  const result = await query(
+    `SELECT slack_bot_token FROM users
+     WHERE slack_bot_token IS NOT NULL AND slack_bot_token != ''
+     ORDER BY updated_at DESC NULLS LAST
+     LIMIT 1`
+  );
+  return result.rows[0]?.slack_bot_token || null;
+}
+
+/** Home view for Slack users who haven't linked their MindSprint account yet. */
+async function publishUnlinkedHome(slackUserId) {
+  const token = await getWorkspaceBotToken();
+  if (!token || !slackUserId) return { ok: false, error: 'no_token' };
+  const frontend = process.env.FRONTEND_URL || 'https://mindsprint0.duckdns.org';
+  return slackApi(token, 'views.publish', {
+    user_id: slackUserId,
+    view: {
+      type: 'home',
+      blocks: [
+        { type: 'header', text: { type: 'plain_text', text: 'MindSprint', emoji: true } },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text:
+              `Your Slack account isn't linked yet.\n\n` +
+              `1. Open <${frontend}/settings|MindSprint Settings>\n` +
+              `2. Paste your Slack User ID: \`${slackUserId}\`\n` +
+              `3. Paste your Bot Token\n` +
+              `4. Come back here and reopen the Home tab`
+          }
+        }
+      ]
+    }
+  });
+}
+
 async function openCreateTaskModal(user, triggerId, { channelId = null, projectId = null } = {}) {
   const projects = await query(
     'SELECT id, title FROM projects WHERE user_id = $1 ORDER BY title ASC LIMIT 90',
@@ -256,19 +294,30 @@ router.post('/events', requireSlackSignature, async (req, res) => {
     res.sendStatus(200);
 
     const event = body.event;
-    if (!event || event.bot_id || event.subtype === 'bot_message') return;
+    if (!event) return;
 
+    // Home / channel lifecycle must not be filtered as bot noise
     setImmediate(async () => {
       try {
         if (event.type === 'app_home_opened') {
+          // Only refresh when the Home tab is opened (ignore Messages tab)
+          if (event.tab && event.tab !== 'home') {
+            console.log('app_home_opened ignored tab=', event.tab, 'user=', event.user);
+            return;
+          }
+          console.log('app_home_opened user=', event.user, 'tab=', event.tab || 'home');
           const user = await getUserBySlackUserId(event.user);
           if (user) {
-            await publishHome(user);
+            const result = await publishHome(user);
+            console.log('publishHome result', result?.ok, result?.error || '');
           } else {
             console.warn('app_home_opened for unlinked Slack user', event.user);
+            await publishUnlinkedHome(event.user);
           }
           return;
         }
+
+        if (event.bot_id || event.subtype === 'bot_message' || event.subtype === 'message_changed') return;
 
         // Public channel created → auto project (private channels have no Events API equivalent)
         if (event.type === 'channel_created') {
@@ -620,6 +669,15 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
         });
       }
 
+      case 'home': {
+        res.json({
+          response_type: 'ephemeral',
+          text: 'Refreshing App Home… open *Apps → MindSprint → Home* (leave and come back if it’s still blank).'
+        });
+        publishHome(user).catch((err) => console.error('sprint home refresh error:', err));
+        return;
+      }
+
       case 'help':
       default: {
         if (!action) {
@@ -647,6 +705,7 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
                   '`/sprint ask <question>` — Ask the AI (reply via DM)\n' +
                   '`/sprint due <title|#> YYYY-MM-DD` — Set a due date\n' +
                   '`/sprint link <project>` — Link this channel to a project\n' +
+                  '`/sprint home` — Refresh App Home\n' +
                   '`/sprint help` — Show this help\n' +
                   '_Or DM MindSprint for a full AI chat._'
               }
