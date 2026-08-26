@@ -824,6 +824,11 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
   try {
     const payload = JSON.parse(req.body.payload || '{}');
     const { type, actions, user: slackUser, view, trigger_id: triggerId, callback_id: callbackId } = payload;
+    const responseUrl = payload.response_url || null;
+    const isHome =
+      view?.type === 'home' ||
+      payload.container?.type === 'view' ||
+      payload.container?.type === 'root';
 
     const dbUser = await getUserBySlackUserId(slackUser?.id);
     if (!dbUser) {
@@ -833,6 +838,38 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
         text: 'Your Slack account is not linked to MindSprint. Go to Settings in the app to link it.'
       });
     }
+
+    /** Prefer clearing message buttons via response_url when Slack ignores replace_original. */
+    const clearOriginalMessage = (text) => {
+      if (!responseUrl) return;
+      fetch(responseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          replace_original: true,
+          text: String(text || '').replace(/\*/g, '').replace(/~/g, ''),
+          blocks: buildStatusBlocks(text)
+        })
+      }).catch((err) => console.error('response_url clear error:', err.message));
+    };
+
+    const replyTaskAction = (text) => {
+      if (isHome) {
+        // App Home ignores replace_original — must republish the view to drop buttons
+        return publishHome(dbUser)
+          .then(() => res.send(''))
+          .catch((err) => {
+            console.error('Home republish after action error:', err);
+            res.send('');
+          });
+      }
+      clearOriginalMessage(text);
+      return res.json({
+        replace_original: true,
+        text: String(text || '').replace(/\*/g, '').replace(/~/g, ''),
+        blocks: buildStatusBlocks(text)
+      });
+    };
 
     // Global shortcut: New MindSprint task
     if (type === 'shortcut' && (callbackId === 'new_mindsprint_task' || payload.callback_id === 'new_mindsprint_task')) {
@@ -904,7 +941,15 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
       case 'task_done': {
         const task = await findAccessibleTask(action.value, dbUser.id);
         if (!task) {
+          if (isHome) {
+            await publishHome(dbUser).catch(() => {});
+            return res.send('');
+          }
           return res.json({ replace_original: false, text: 'Task not found or already completed.' });
+        }
+
+        if (task.status === 'done') {
+          return replyTaskAction(`*Already done:* ~~${task.title}~~`);
         }
 
         await query(
@@ -921,19 +966,21 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
         }).catch(() => {});
 
         const doneText = `*Done!* ~~${task.title}~~ — finally. I'll stop nagging about this one.`;
-        res.json({
-          replace_original: true,
-          text: doneText.replace(/\*/g, '').replace(/~/g, ''),
-          blocks: buildStatusBlocks(doneText)
-        });
-        publishHome(dbUser).catch(() => {});
-        return;
+        return replyTaskAction(doneText);
       }
 
       case 'task_doing': {
         const task = await findAccessibleTask(action.value, dbUser.id);
         if (!task) {
+          if (isHome) {
+            await publishHome(dbUser).catch(() => {});
+            return res.send('');
+          }
           return res.json({ replace_original: false, text: 'Task not found.' });
+        }
+
+        if (task.status === 'done') {
+          return replyTaskAction(`*Already done:* ~~${task.title}~~ — no need to mark doing.`);
         }
 
         await query(
@@ -949,13 +996,7 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
         }).catch(() => {});
 
         const doingText = `*On it:* ${task.title}\nGood. Don't wander off — I'll check back if it stalls.`;
-        res.json({
-          replace_original: true,
-          text: doingText.replace(/\*/g, ''),
-          blocks: buildStatusBlocks(doingText)
-        });
-        publishHome(dbUser).catch(() => {});
-        return;
+        return replyTaskAction(doingText);
       }
 
       case 'task_snooze': {
@@ -963,7 +1004,15 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
         const [taskId, token = '1h'] = raw.includes('|') ? raw.split('|') : [raw, '1h'];
         const task = await findAccessibleTask(taskId, dbUser.id);
         if (!task) {
+          if (isHome) {
+            await publishHome(dbUser).catch(() => {});
+            return res.send('');
+          }
           return res.json({ replace_original: false, text: 'Task not found.' });
+        }
+
+        if (task.status === 'done') {
+          return replyTaskAction(`*Already done:* ~~${task.title}~~ — nothing to snooze.`);
         }
 
         const snooze = snoozeInterval(token);
@@ -979,11 +1028,7 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
         );
 
         const snoozeText = `*Snoozed* ${task.title} for ${snooze.label}. Don't think you're off the hook.`;
-        return res.json({
-          replace_original: true,
-          text: snoozeText.replace(/\*/g, ''),
-          blocks: buildStatusBlocks(snoozeText)
-        });
+        return replyTaskAction(snoozeText);
       }
 
       case 'home_new_task': {
@@ -1019,87 +1064,100 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
       }
 
       case 'home_focus_done': {
-        res.send('');
-        setImmediate(async () => {
-          try {
-            const sessionId = action.value || null;
-            const active = sessionId
-              ? await query(
-                  `SELECT id, started_at FROM sessions
-                   WHERE id = $1 AND user_id = $2 AND completed = false AND ended_at IS NULL`,
-                  [sessionId, dbUser.id]
-                )
-              : { rows: [] };
-            let session = active.rows[0];
-            if (!session) {
-              const fallback = await getActiveFocusSession(dbUser.id);
-              if (!fallback) return;
-              session = fallback;
-            }
+        try {
+          const sessionId = action.value || null;
+          const active = sessionId
+            ? await query(
+                `SELECT id, started_at, ended_at, completed FROM sessions
+                 WHERE id = $1 AND user_id = $2`,
+                [sessionId, dbUser.id]
+              )
+            : { rows: [] };
+          let session = active.rows[0];
+          if (!session || session.ended_at || session.completed) {
+            const fallback = await getActiveFocusSession(dbUser.id);
+            session = fallback || null;
+          }
 
-            await query(
-              `UPDATE sessions
-               SET ended_at = NOW(),
-                   completed = true,
-                   actual_duration_minutes = GREATEST(
-                     1,
-                     FLOOR(EXTRACT(EPOCH FROM (NOW() - started_at)) / 60)
-                   ),
-                   self_rating = COALESCE(self_rating, 5),
-                   notes = COALESCE(notes, 'Ended from Slack Home')
-               WHERE id = $1 AND user_id = $2 AND ended_at IS NULL`,
-              [session.id, dbUser.id]
-            );
+          if (!session) {
+            await publishHome(dbUser);
+            return res.send('');
+          }
 
+          await query(
+            `UPDATE sessions
+             SET ended_at = NOW(),
+                 completed = true,
+                 actual_duration_minutes = GREATEST(
+                   1,
+                   FLOOR(EXTRACT(EPOCH FROM (NOW() - started_at)) / 60)
+                 ),
+                 self_rating = COALESCE(self_rating, 5),
+                 notes = COALESCE(notes, 'Ended from Slack Home')
+             WHERE id = $1 AND user_id = $2 AND ended_at IS NULL`,
+            [session.id, dbUser.id]
+          );
+
+          // Drop Home buttons immediately, then finish Slack channel/status updates
+          await publishHome(dbUser);
+
+          setImmediate(async () => {
             try {
               await recordSessionEnd(dbUser.id, session.id);
             } catch (err) {
               console.error('home_focus_done learning error:', err.message);
             }
+            await announceFocusEnd(session.id, dbUser.id).catch(() => {});
+          });
 
-            await announceFocusEnd(session.id, dbUser.id);
-            await publishHome(dbUser);
-          } catch (err) {
-            console.error('home_focus_done error:', err);
-          }
-        });
-        return;
+          return res.send('');
+        } catch (err) {
+          console.error('home_focus_done error:', err);
+          await publishHome(dbUser).catch(() => {});
+          return res.send('');
+        }
       }
 
       case 'home_focus_extend': {
-        res.send('');
-        setImmediate(async () => {
-          try {
-            const sessionId = action.value || null;
-            let targetId = sessionId;
-            if (targetId) {
-              const check = await query(
-                `SELECT id FROM sessions
-                 WHERE id = $1 AND user_id = $2 AND completed = false AND ended_at IS NULL`,
-                [targetId, dbUser.id]
-              );
-              if (!check.rows[0]) targetId = null;
-            }
-            if (!targetId) {
-              const active = await getActiveFocusSession(dbUser.id);
-              if (!active) return;
-              targetId = active.id;
-            }
-
-            await query(
-              `UPDATE sessions
-               SET duration_minutes = COALESCE(duration_minutes, 25) + 10
-               WHERE id = $1 AND user_id = $2 AND ended_at IS NULL`,
+        try {
+          const sessionId = action.value || null;
+          let targetId = sessionId;
+          if (targetId) {
+            const check = await query(
+              `SELECT id FROM sessions
+               WHERE id = $1 AND user_id = $2 AND completed = false AND ended_at IS NULL`,
               [targetId, dbUser.id]
             );
-
-            await updateFocusAnnouncement(targetId, dbUser.id);
-            await publishHome(dbUser);
-          } catch (err) {
-            console.error('home_focus_extend error:', err);
+            if (!check.rows[0]) targetId = null;
           }
-        });
-        return;
+          if (!targetId) {
+            const active = await getActiveFocusSession(dbUser.id);
+            if (!active) {
+              await publishHome(dbUser);
+              return res.send('');
+            }
+            targetId = active.id;
+          }
+
+          await query(
+            `UPDATE sessions
+             SET duration_minutes = COALESCE(duration_minutes, 25) + 10
+             WHERE id = $1 AND user_id = $2 AND ended_at IS NULL`,
+            [targetId, dbUser.id]
+          );
+
+          await publishHome(dbUser);
+          setImmediate(() => {
+            updateFocusAnnouncement(targetId, dbUser.id).catch((err) =>
+              console.error('home_focus_extend announce error:', err.message)
+            );
+          });
+          return res.send('');
+        } catch (err) {
+          console.error('home_focus_extend error:', err);
+          await publishHome(dbUser).catch(() => {});
+          return res.send('');
+        }
       }
 
       case 'home_plan_day': {
