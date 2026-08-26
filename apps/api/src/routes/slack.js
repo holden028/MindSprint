@@ -839,36 +839,77 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
       });
     }
 
-    /** Prefer clearing message buttons via response_url when Slack ignores replace_original. */
-    const clearOriginalMessage = (text) => {
-      if (!responseUrl) return;
-      fetch(responseUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          replace_original: true,
-          text: String(text || '').replace(/\*/g, '').replace(/~/g, ''),
-          blocks: buildStatusBlocks(text)
-        })
-      }).catch((err) => console.error('response_url clear error:', err.message));
+    /** Strip action buttons from the chat message that was clicked. */
+    const stripChatButtons = async (text) => {
+      const plain = String(text || '').replace(/\*/g, '').replace(/~/g, '');
+      const blocks = buildStatusBlocks(text);
+      const channel =
+        payload.channel?.id ||
+        payload.container?.channel_id ||
+        null;
+      const ts =
+        payload.message?.ts ||
+        payload.container?.message_ts ||
+        null;
+      const ephemeral = payload.container?.is_ephemeral === true;
+
+      // Most reliable for bot DMs / channel posts: rewrite the message without actions
+      if (!ephemeral && channel && ts && dbUser.slack_bot_token) {
+        const updated = await slackApi(dbUser.slack_bot_token, 'chat.update', {
+          channel,
+          ts,
+          text: plain,
+          blocks
+        });
+        if (!updated?.ok) {
+          console.error('chat.update strip buttons failed:', updated?.error || updated);
+        } else {
+          return true;
+        }
+      }
+
+      // Ephemeral messages (and chat.update fallback): response_url replace
+      if (responseUrl) {
+        try {
+          const r = await fetch(responseUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              replace_original: true,
+              text: plain,
+              blocks
+            })
+          });
+          if (!r.ok) {
+            console.error('response_url strip buttons HTTP', r.status);
+          }
+          return true;
+        } catch (err) {
+          console.error('response_url strip buttons error:', err.message);
+        }
+      }
+      return false;
     };
 
-    const replyTaskAction = (text) => {
+    const replyTaskAction = async (text) => {
       if (isHome) {
         // App Home ignores replace_original — must republish the view to drop buttons
-        return publishHome(dbUser)
-          .then(() => res.send(''))
-          .catch((err) => {
-            console.error('Home republish after action error:', err);
-            res.send('');
-          });
+        try {
+          await publishHome(dbUser);
+        } catch (err) {
+          console.error('Home republish after action error:', err);
+        }
+        return res.send('');
       }
-      clearOriginalMessage(text);
-      return res.json({
-        replace_original: true,
-        text: String(text || '').replace(/\*/g, '').replace(/~/g, ''),
-        blocks: buildStatusBlocks(text)
-      });
+
+      try {
+        await stripChatButtons(text);
+      } catch (err) {
+        console.error('stripChatButtons error:', err);
+      }
+
+      // Empty ack — message already rewritten via chat.update / response_url
+      return res.send('');
     };
 
     // Global shortcut: New MindSprint task
