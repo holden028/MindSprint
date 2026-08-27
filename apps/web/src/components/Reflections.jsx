@@ -95,7 +95,11 @@ export default function Reflections() {
                   <TrendingUp className="text-green-300" size={24} />
                 </div>
                 <div>
-                  <div className="text-2xl font-bold text-white">{stats.sessions?.avg_rating?.toFixed(1) || 'N/A'}</div>
+                  <div className="text-2xl font-bold text-white">
+                    {Number.isFinite(Number(stats.sessions?.avg_rating))
+                      ? Number(stats.sessions.avg_rating).toFixed(1)
+                      : 'N/A'}
+                  </div>
                   <div className="text-white/60 text-sm">Avg Rating</div>
                 </div>
               </div>

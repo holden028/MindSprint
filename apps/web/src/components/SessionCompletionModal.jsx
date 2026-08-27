@@ -52,7 +52,6 @@ function SessionCompletionModal({
 
     await onSubmit(sessionSummary);
     setSubmitting(false);
-    onClose();
   };
 
   if (!isOpen) return null;

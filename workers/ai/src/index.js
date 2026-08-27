@@ -15,6 +15,14 @@ const openai = new OpenAI({
   maxRetries: 1
 });
 
+function taskAiInterpretations(task) {
+  const work_mode = task.workMode === 'focus' ? 'focus' : 'quick';
+  return JSON.stringify({
+    work_mode,
+    work_mode_reason: 'Classified when task was created from AI breakdown',
+  });
+}
+
 function redisConnection() {
   const url = process.env.REDIS_URL || 'redis://redis:6379';
   try {
@@ -100,8 +108,8 @@ const worker = new Worker('ingest', async (job) => {
     // Create tasks
     for (const task of breakdown.tasks) {
       const taskResult = await pool.query(`
-        INSERT INTO tasks (project_id, title, description, est_minutes, priority, urgency)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO tasks (project_id, title, description, est_minutes, priority, urgency, ai_interpretations)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id
       `, [
         projectId,
@@ -109,7 +117,8 @@ const worker = new Worker('ingest', async (job) => {
         task.description || '',
         task.estMinutes || 30,
         task.priority || 3,
-        task.urgency || 3
+        task.urgency || 3,
+        taskAiInterpretations(task)
       ]);
       console.log(`✅ Created task: ${task.title} (ID: ${taskResult.rows[0].id})`);
     }
@@ -171,9 +180,9 @@ const worker = new Worker('ingest', async (job) => {
       // Create mock tasks
       for (const task of mockBreakdown.tasks) {
         await pool.query(`
-          INSERT INTO tasks (project_id, title, description, est_minutes, priority, urgency)
-          VALUES ($1, $2, $3, $4, $5, $6)
-        `, [projectId, task.title, task.description, task.estMinutes, task.priority, task.urgency]);
+          INSERT INTO tasks (project_id, title, description, est_minutes, priority, urgency, ai_interpretations)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [projectId, task.title, task.description, task.estMinutes, task.priority, task.urgency, taskAiInterpretations(task)]);
       }
 
       // Mark as completed with mock data
@@ -216,10 +225,13 @@ Respond ONLY with valid JSON in this exact format:
       "description": "Task description",
       "estMinutes": 15,
       "priority": 4,
-      "urgency": 4
+      "urgency": 4,
+      "workMode": "quick"
     }
   ]
 }
+
+workMode: "quick" for single-step tasks under ~15 min (mark done with yes/no). "focus" for multi-step or longer work needing a timed focus session.
 
 Priority and Urgency scale: 1 (lowest) to 5 (highest)
 Make tasks specific, actionable, and completable in 5-20 minutes.`;
@@ -255,10 +267,13 @@ Respond ONLY with valid JSON in this exact format:
       "description": "Task description",
       "estMinutes": 15,
       "priority": 4,
-      "urgency": 4
+      "urgency": 4,
+      "workMode": "quick"
     }
   ]
 }
+
+workMode: "quick" for single-step tasks under ~15 min (mark done with yes/no). "focus" for multi-step or longer work needing a timed focus session.
 
 Priority and Urgency scale: 1 (lowest) to 5 (highest)`;
 
@@ -342,6 +357,8 @@ function computeNextOccurrence(rule, fromDate = new Date()) {
 const recurringQueue = new Queue('recurring-tasks', { connection: redisConnection() });
 const reminderQueue = new Queue('reminders', { connection: redisConnection() });
 const { buildTaskActionBlocks } = require('./slackBlocks');
+const { withWorkMode } = require('./taskWorkMode');
+const { buildDigestBlocks } = require('./slackRichBlocks');
 
 recurringQueue.add('process-recurring', {}, {
   repeat: { every: 5 * 60 * 1000 }
@@ -388,11 +405,13 @@ const reminderWorker = new Worker('reminders', async () => {
   try {
     const dueReminders = await pool.query(
       `SELECT r.*, t.title as task_title, t.status as task_status, t.due_at, t.est_minutes,
-              t.priority, t.urgency, t.project_id,
+              t.priority, t.urgency, t.project_id, t.description, t.ai_interpretations,
+              p.title as project_title,
               u.slack_webhook_url, u.slack_user_id, u.slack_bot_token, u.app_base_url, u.timezone,
               u.slack_enabled, u.slack_intensity, u.quiet_hours_start, u.quiet_hours_end
        FROM reminders r
        JOIN tasks t ON r.task_id = t.id
+       JOIN projects p ON t.project_id = p.id
        JOIN users u ON r.user_id = u.id
        WHERE r.remind_at <= NOW() AND r.sent = false
        ORDER BY r.remind_at ASC`
@@ -611,10 +630,22 @@ function buildReminderCopy(kind, reminder, frontendUrl) {
   };
 
   const copy = nag[kind] || nag.custom;
+  const task = withWorkMode({
+    id: reminder.task_id,
+    title: reminder.task_title,
+    description: reminder.description,
+    ai_interpretations: reminder.ai_interpretations,
+    est_minutes: reminder.est_minutes,
+    project_id: reminder.project_id,
+    project_title: reminder.project_title,
+    due_at: reminder.due_at,
+    status: reminder.task_status
+  });
   copy.blocks = buildTaskActionBlocks({
     text: copy.slackText,
     taskId: reminder.task_id,
-    openUrl: link
+    openUrl: link,
+    task
   });
   return copy;
 }
@@ -863,6 +894,7 @@ async function loadOwnerRoundupData(userId) {
 
 async function sendOwnerDigest(user, kind) {
   const frontendUrl = resolveAppBase(user.app_base_url);
+  const tz = user.timezone || 'Europe/London';
   const now = new Date();
   const { mine, assignedOut } = await loadOwnerRoundupData(user.id);
   const myBuckets = bucketByDue(mine, now);
@@ -870,51 +902,89 @@ async function sendOwnerDigest(user, kind) {
   const stuck = assignedOut.filter((t) => t.status === 'todo' && t.due_at && new Date(t.due_at) < now);
 
   const isEvening = kind === 'evening';
-  const lines = [isEvening ? '🌙 *MindSprint — Evening roundup*' : '☀️ *MindSprint — Today*'];
-
-  if (!isEvening) {
-    pushTaskLines(lines, `🔴 *Overdue (${myBuckets.overdue.length})*`, myBuckets.overdue);
-    pushTaskLines(lines, `🟠 *Due today (${myBuckets.dueToday.length})*`, myBuckets.dueToday, (t) => (
-      ` (${new Date(t.due_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`
-    ));
-    pushTaskLines(lines, `🟡 *Start today (${myBuckets.startToday.length})*`, myBuckets.startToday);
-  } else {
-    pushTaskLines(lines, `🔴 *Your unassigned overdue (${myBuckets.overdue.length})*`, myBuckets.overdue);
-  }
-
-  if (assignedOut.length) {
-    lines.push(`👤 *Assigned out (${assignedOut.length})*`);
-    pushTaskLines(lines, `  Overdue (${outBuckets.overdue.length})`, outBuckets.overdue, (t) => (
-      t.assignee_email ? ` — ${t.assignee_email}` : ''
-    ));
-    pushTaskLines(lines, `  Due today (${outBuckets.dueToday.length})`, outBuckets.dueToday, (t) => (
-      t.assignee_email ? ` — ${t.assignee_email}` : ''
-    ));
-    pushTaskLines(lines, `  In progress (${outBuckets.inProgress.length})`, outBuckets.inProgress, (t) => (
-      t.assignee_email ? ` — ${t.assignee_email}` : ''
-    ));
-    if (stuck.length) {
-      pushTaskLines(lines, `  Stuck / not started (${stuck.length})`, stuck, (t) => (
-        t.assignee_email ? ` — ${t.assignee_email}` : ''
-      ));
-    }
-  }
-
   const hasMine = isEvening
     ? myBuckets.overdue.length > 0
     : (myBuckets.overdue.length || myBuckets.dueToday.length || myBuckets.startToday.length);
   if (!hasMine && assignedOut.length === 0) return false;
 
-  lines.push(`<${frontendUrl}/dashboard|Open Today plan>`);
-  const text = lines.join('\n');
+  const annotated = mine.map((t) => withWorkMode({ ...t, title: t.title }));
+  const quickTasks = annotated.filter((t) => t.work_mode === 'quick');
+  const focusTasks = annotated.filter((t) => t.work_mode === 'focus');
+
+  const [statsRow, sessionsToday, tasksToday, focusMinutes, streakResult] = await Promise.all([
+    pool.query(
+      `SELECT COUNT(*)::int AS n FROM tasks t JOIN projects p ON t.project_id = p.id
+       WHERE p.user_id = $1 AND t.status != 'done'`,
+      [user.id]
+    ),
+    pool.query(
+      `SELECT COUNT(*)::int AS n FROM sessions
+       WHERE user_id = $1 AND completed = true
+         AND (ended_at AT TIME ZONE $2)::date = (NOW() AT TIME ZONE $2)::date`,
+      [user.id, tz]
+    ),
+    pool.query(
+      `SELECT COUNT(*)::int AS n FROM tasks t JOIN projects p ON t.project_id = p.id
+       WHERE p.user_id = $1 AND t.status = 'done'
+         AND (t.completed_at AT TIME ZONE $2)::date = (NOW() AT TIME ZONE $2)::date`,
+      [user.id, tz]
+    ),
+    pool.query(
+      `SELECT COALESCE(SUM(actual_duration_minutes), 0)::int AS m FROM sessions
+       WHERE user_id = $1 AND completed = true
+         AND (ended_at AT TIME ZONE $2)::date = (NOW() AT TIME ZONE $2)::date`,
+      [user.id, tz]
+    ),
+    pool.query(
+      `WITH session_days AS (
+         SELECT DISTINCT (started_at AT TIME ZONE $2)::date AS session_date
+         FROM sessions WHERE user_id = $1 AND completed = true
+       ),
+       streak_calc AS (
+         SELECT session_date,
+           session_date - ROW_NUMBER() OVER (ORDER BY session_date DESC)::integer AS streak_group
+         FROM session_days
+       )
+       SELECT COUNT(*)::int AS streak FROM streak_calc
+       WHERE streak_group = (
+         SELECT MAX(streak_group) FROM streak_calc
+         WHERE session_date >= (NOW() AT TIME ZONE $2)::date - 1
+       )`,
+      [user.id, tz]
+    )
+  ]);
+
+  let assignedSummary = null;
+  if (assignedOut.length) {
+    assignedSummary = `👤 *Assigned out (${assignedOut.length})* · overdue ${outBuckets.overdue.length} · due today ${outBuckets.dueToday.length}${stuck.length ? ` · stuck ${stuck.length}` : ''}`;
+  }
+
+  const blocks = buildDigestBlocks({
+    kind: isEvening ? 'evening' : 'morning',
+    frontend: frontendUrl,
+    stats: {
+      openTasks: statsRow.rows[0]?.n || 0,
+      tasksDoneToday: tasksToday.rows[0]?.n || 0,
+      sessionsToday: sessionsToday.rows[0]?.n || 0,
+      focusMinutesToday: focusMinutes.rows[0]?.m || 0,
+      streak: streakResult.rows[0]?.streak || 0
+    },
+    quickTasks: isEvening ? [] : quickTasks,
+    focusTasks: isEvening ? [] : focusTasks,
+    overdue: myBuckets.overdue,
+    dueToday: myBuckets.dueToday,
+    assignedSummary
+  });
+
+  const plain = isEvening ? 'Evening roundup' : 'Morning plan';
   const notifType = isEvening ? 'evening_roundup' : 'morning_digest';
   const title = isEvening ? 'Evening roundup' : 'Morning plan';
   await pool.query(
     `INSERT INTO notifications (user_id, type, title, body)
      VALUES ($1, $2, $3, $4)`,
-    [user.id, notifType, title, text.replace(/\*/g, '').slice(0, 800)]
+    [user.id, notifType, title, plain]
   );
-  await sendSlackDM(user, text);
+  await sendSlackDM(user, plain, blocks);
   return true;
 }
 

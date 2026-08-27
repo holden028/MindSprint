@@ -57,8 +57,8 @@ export default function InsightsDashboard() {
   }
 
   const bestTimeOfDay = insights?.bestTimeOfDay || { hour: 14, sessions: 0 };
-  const avgEnergy = insights?.avgEnergy ?? 3;
-  const avgFocus = insights?.avgFocus ?? 3;
+  const avgEnergy = Number(insights?.avgEnergy ?? 3);
+  const avgFocus = Number(insights?.avgFocus ?? 3);
   const topDistraction = insights?.topDistraction || { type: 'None', count: 0 };
 
   return (

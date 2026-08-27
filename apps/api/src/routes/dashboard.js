@@ -3,6 +3,7 @@ const { query } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { taskVisibleSql, projectVisibleSql, taskAccessSelectSql, withTaskAccessFlags, getProjectAccess } = require('../utils/access');
 const { getSuggestions } = require('../services/learning');
+const { withWorkMode } = require('../utils/taskWorkMode');
 
 const router = express.Router();
 
@@ -102,11 +103,11 @@ function annotateTask(task, now = new Date()) {
     else if (startBy && startBy <= todayEnd) urgency_bucket = 'start_today';
   }
 
-  return {
+  return withWorkMode({
     ...task,
     start_by: startBy ? startBy.toISOString() : null,
     urgency_bucket
-  };
+  });
 }
 
 function scoreForToday(task, freeMinutes) {

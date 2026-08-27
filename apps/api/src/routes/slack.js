@@ -1,8 +1,12 @@
 const express = require('express');
 const { query } = require('../config/database');
-const { buildTaskActionBlocks, buildStatusBlocks, parseActionId } = require('../utils/slackBlocks');
+const { buildTaskActionBlocks, buildStatusBlocks, parseActionId, buildHomeTaskBlocks } = require('../utils/slackBlocks');
+const { buildPlanDayBlocks } = require('../utils/slackRichBlocks');
+const { getTodayPlanForUser } = require('../services/todayPlan');
+const { withWorkMode } = require('../utils/taskWorkMode');
 const { requireSlackSignature } = require('../utils/slackVerify');
 const { buildHomeView, buildCreateTaskModal } = require('../utils/slackHome');
+const { buildAiInterpretations } = require('../utils/taskWorkMode');
 const { runAssistantChat } = require('../services/aiChat');
 const { createAutoReminders } = require('../services/reminders');
 const { recordSessionEnd } = require('../services/learning');
@@ -131,18 +135,27 @@ async function publishUnlinkedHome(slackUserId) {
     view: {
       type: 'home',
       blocks: [
-        { type: 'header', text: { type: 'plain_text', text: 'MindSprint', emoji: true } },
+        { type: 'header', text: { type: 'plain_text', text: '🧠 MindSprint', emoji: true } },
         {
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text:
-              `Your Slack account isn't linked yet.\n\n` +
-              `1. Open <${frontend}/settings|MindSprint Settings>\n` +
-              `2. Paste your Slack User ID: \`${slackUserId}\`\n` +
-              `3. Paste your Bot Token\n` +
-              `4. Come back here and reopen the Home tab`
+            text: '*Almost there* — link Slack to unlock your personal command center.'
           }
+        },
+        {
+          type: 'section',
+          fields: [
+            { type: 'mrkdwn', text: `*1.* Open Settings\n<${frontend}/settings|MindSprint Settings>` },
+            { type: 'mrkdwn', text: '*2.* Paste Slack User ID\n`' + slackUserId + '`' }
+          ]
+        },
+        {
+          type: 'context',
+          elements: [{
+            type: 'mrkdwn',
+            text: 'Add your Bot Token too, then reopen this Home tab. You will get tasks, focus sessions, and AI planning right here.'
+          }]
         }
       ]
     }
@@ -231,12 +244,20 @@ async function createTaskForUser(user, {
     }
   }
 
+  const aiInterpretations = buildAiInterpretations(null, {
+    title,
+    description,
+    est_minutes: estMinutes,
+    priority,
+    urgency
+  });
+
   const taskResult = await query(
-    `INSERT INTO tasks (project_id, title, description, priority, urgency, est_minutes, due_at, original_title, original_description)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+    `INSERT INTO tasks (project_id, title, description, priority, urgency, est_minutes, due_at, original_title, original_description, ai_interpretations)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
     [
       resolvedProjectId, title, description || '', priority, urgency,
-      estMinutes, dueAt, title, description || ''
+      estMinutes, dueAt, title, description || '', JSON.stringify(aiInterpretations)
     ]
   );
   const task = taskResult.rows[0];
@@ -474,21 +495,23 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
         }
 
         const task = await createTaskForUser(user, { title });
+        const enriched = withWorkMode(task);
         const openUrl = taskOpenUrl(frontend, task.project_id, task.id);
         return res.json({
           response_type: 'ephemeral',
-          text: `Task created: ${title}`,
-          blocks: buildTaskActionBlocks({
-            text: `*Task created:* ${title}\nI'll nag you once it has a due date.`,
-            taskId: task.id,
-            openUrl
+          text: `Task created: ${title} (${enriched.work_mode})`,
+          blocks: buildHomeTaskBlocks({
+            task: enriched,
+            openUrl,
+            uniqueIds: false
           })
         });
       }
 
       case 'list': {
         const tasksResult = await query(
-          `SELECT t.id, t.title, t.priority, t.urgency, t.status, t.est_minutes, t.project_id
+          `SELECT t.id, t.title, t.priority, t.urgency, t.status, t.est_minutes, t.project_id,
+                  t.description, t.ai_interpretations, p.title AS project_title
            FROM tasks t JOIN projects p ON t.project_id = p.id
            WHERE p.user_id = $1 AND t.status != 'done'
            ORDER BY t.priority DESC, t.urgency DESC
@@ -500,18 +523,26 @@ router.post('/commands', requireSlackSignature, async (req, res) => {
           return res.json({ response_type: 'ephemeral', text: 'No open tasks. Use `/sprint add` to create one!' });
         }
 
-        const taskBlocks = tasksResult.rows.flatMap((t, i) =>
-          buildTaskActionBlocks({
-            text: `${i + 1}. *${t.title}*  ·  P${t.priority} U${t.urgency}  ·  ${t.est_minutes}min  ·  _${t.status}_`,
-            taskId: t.id,
-            openUrl: taskOpenUrl(frontend, t.project_id, t.id)
+        const annotated = tasksResult.rows.map((t) => withWorkMode({ ...t, project_title: t.project_title }));
+        const taskBlocks = annotated.flatMap((t) =>
+          buildHomeTaskBlocks({
+            task: t,
+            openUrl: taskOpenUrl(frontend, t.project_id, t.id),
+            uniqueIds: false
           })
         );
 
         return res.json({
           response_type: 'ephemeral',
           blocks: [
-            { type: 'header', text: { type: 'plain_text', text: 'Your Open Tasks' } },
+            { type: 'header', text: { type: 'plain_text', text: '📋 Your open tasks' } },
+            {
+              type: 'context',
+              elements: [{
+                type: 'mrkdwn',
+                text: `${annotated.filter((t) => t.work_mode === 'quick').length} quick · ${annotated.filter((t) => t.work_mode === 'focus').length} focus`
+              }]
+            },
             ...taskBlocks
           ]
         });
@@ -963,10 +994,10 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
       postSlackDM(
         dbUser,
         `Task created: *${title}*`,
-        buildTaskActionBlocks({
-          text: `*Task created:* ${title}${dueAt ? `\nDue ${dueDate}` : ''}`,
-          taskId: task.id,
-          openUrl
+        buildHomeTaskBlocks({
+          task: withWorkMode(task),
+          openUrl,
+          uniqueIds: false
         })
       ).catch(() => {});
       publishHome(dbUser).catch(() => {});
@@ -1072,11 +1103,34 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
         return replyTaskAction(snoozeText);
       }
 
-      case 'home_new_task': {
+      case 'home_new_task':
+      case 'home_new_task_alt': {
         res.send('');
         openCreateTaskModal(dbUser, triggerId || payload.trigger_id).catch((err) =>
           console.error('Home new task modal error:', err)
         );
+        return;
+      }
+
+      case 'home_task_focus': {
+        res.send('');
+        setImmediate(async () => {
+          try {
+            const taskId = action.value || null;
+            if (!taskId) return;
+            const task = await findAccessibleTask(taskId, dbUser.id);
+            if (!task) {
+              await publishHome(dbUser);
+              return;
+            }
+            const full = await query('SELECT est_minutes FROM tasks WHERE id = $1', [taskId]);
+            let durationMinutes = Math.min(90, Math.max(5, full.rows[0]?.est_minutes || 25));
+            let mode = durationMinutes <= 15 ? 'adhd' : 'pomodoro';
+            await startFocusSessionForUser(dbUser, { taskId, mode, durationMinutes });
+          } catch (err) {
+            console.error('home_task_focus error:', err);
+          }
+        });
         return;
       }
 
@@ -1205,18 +1259,45 @@ router.post('/interactions', requireSlackSignature, async (req, res) => {
         res.send('');
         setImmediate(async () => {
           try {
-            const result = await runAssistantChat({
-              userId: dbUser.id,
-              message: 'Plan my day — what should I work on and in what order?',
-              slackThreadKey: `home-plan:${dbUser.id}:${new Date().toISOString().slice(0, 10)}`
+            const frontend = resolveAppBase(dbUser.app_base_url);
+            const [todayPlan, result] = await Promise.all([
+              getTodayPlanForUser(dbUser.id),
+              runAssistantChat({
+                userId: dbUser.id,
+                message: 'Plan my day — what should I work on and in what order? Keep it concise and actionable.',
+                slackThreadKey: `home-plan:${dbUser.id}:${new Date().toISOString().slice(0, 10)}`
+              })
+            ]);
+
+            const stats = {
+              freeMinutes: todayPlan.freeMinutes,
+              planMinutes: todayPlan.planMinutes
+            };
+            const blocks = buildPlanDayBlocks({
+              aiText: result.response || 'Here is a plan for today.',
+              frontend,
+              stats,
+              quickTasks: todayPlan.plan.filter((t) => t.work_mode === 'quick'),
+              focusTasks: todayPlan.plan.filter((t) => t.work_mode === 'focus')
             });
-            await postSlackDM(dbUser, result.response || 'Here is a plan for today.');
+
+            await postSlackDM(
+              dbUser,
+              'Your plan for today',
+              blocks
+            );
             await publishHome(dbUser);
           } catch (err) {
             console.error('home_plan_day error:', err);
             await postSlackDM(dbUser, 'Could not plan your day just now — try again or open the app.');
           }
         });
+        return;
+      }
+
+      case 'home_refresh': {
+        res.send('');
+        publishHome(dbUser).catch(() => {});
         return;
       }
 

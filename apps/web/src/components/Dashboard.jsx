@@ -1,20 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import LoadingSpinner from './LoadingSpinner';
 import KanbanBoard from './KanbanBoard';
 import TaskBreakdown from './TaskBreakdown';
 import TaskFeedbackModal from './TaskFeedbackModal';
+import QuickCompleteModal from './QuickCompleteModal';
 import ManualTaskModal from './ManualTaskModal';
 import ManualProjectModal from './ManualProjectModal';
+import { needsFocusSession } from '../utils/workMode';
 import {
   Plus, LayoutGrid, List, Trash2, FolderPlus, Target,
-  AlertTriangle, CalendarClock, Clock, Zap, Brain
+  AlertTriangle, CalendarClock, Clock, Zap, Brain, CheckCircle
 } from 'lucide-react';
 import { formatDue, deadlineBadge } from '../utils/deadlines';
 
-function TodayPlanCard({ task, onStart }) {
+function TodayPlanCard({ task, onStart, onQuickComplete }) {
   const badge = deadlineBadge(task);
+  const focusTask = needsFocusSession(task);
+
   return (
     <div className="flex items-center gap-3 backdrop-blur-sm bg-white/10 border border-white/15 rounded-xl px-4 py-3">
       <div className="flex-1 min-w-0">
@@ -22,17 +26,36 @@ function TodayPlanCard({ task, onStart }) {
         <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-white/45">
           <span>{task.est_minutes || 30}m</span>
           {task.project_title && <span>· {task.project_title}</span>}
+          <span className={`px-1.5 py-0.5 rounded border text-[10px] ${
+            focusTask ? 'border-purple-400/30 text-purple-200/80' : 'border-emerald-400/30 text-emerald-200/80'
+          }`}>
+            {focusTask ? 'Focus session' : 'Quick'}
+          </span>
           {badge && (
             <span className={`px-1.5 py-0.5 rounded border text-[10px] ${badge.className}`}>{badge.label}</span>
           )}
         </div>
       </div>
-      <button
-        onClick={() => onStart(task.id, task.title)}
-        className="shrink-0 px-3 py-1.5 bg-green-500/20 hover:bg-green-500/30 text-green-200 rounded-lg text-xs font-medium"
-      >
-        Focus
-      </button>
+      <div className="flex items-center gap-2 shrink-0">
+        {!focusTask && (
+          <button
+            onClick={() => onQuickComplete(task)}
+            className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 rounded-lg text-xs font-medium"
+          >
+            Done
+          </button>
+        )}
+        <button
+          onClick={() => onStart(task.id, task.title)}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
+            focusTask
+              ? 'bg-green-500/20 hover:bg-green-500/30 text-green-200'
+              : 'bg-white/10 hover:bg-white/15 text-white/70'
+          }`}
+        >
+          {focusTask ? 'Focus' : 'Timer'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -47,12 +70,25 @@ export default function Dashboard() {
   const [showManualTaskModal, setShowManualTaskModal] = useState(false);
   const [showManualProjectModal, setShowManualProjectModal] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [showQuickCompleteModal, setShowQuickCompleteModal] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
+  const [sessionCompleteBanner, setSessionCompleteBanner] = useState(false);
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
     loadDashboardData();
   }, []);
+
+  useEffect(() => {
+    if (searchParams.get('sessionComplete') === '1') {
+      setSessionCompleteBanner(true);
+      setSearchParams({}, { replace: true });
+      const timer = setTimeout(() => setSessionCompleteBanner(false), 6000);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [searchParams, setSearchParams]);
 
   const loadDashboardData = async () => {
     try {
@@ -68,8 +104,28 @@ export default function Dashboard() {
   };
 
   const handleTaskComplete = async (taskId) => {
-    setSelectedTask(tasks.find((t) => t.id === taskId));
-    setShowFeedbackModal(true);
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+
+    if (needsFocusSession(task)) {
+      setSelectedTask(task);
+      setShowFeedbackModal(true);
+      return;
+    }
+
+    setSelectedTask(task);
+    setShowQuickCompleteModal(true);
+  };
+
+  const handleQuickComplete = (task) => {
+    setSelectedTask(task);
+    setShowQuickCompleteModal(true);
+  };
+
+  const handleQuickCompleteDone = async () => {
+    setShowQuickCompleteModal(false);
+    setSelectedTask(null);
+    await loadDashboardData();
   };
 
   const handleFeedbackSubmit = async () => {
@@ -101,6 +157,15 @@ export default function Dashboard() {
   return (
     <>
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 pb-24 md:pb-8">
+        {sessionCompleteBanner && (
+          <div className="mb-6 rounded-xl border border-emerald-400/30 bg-emerald-500/15 px-4 py-3 flex items-center gap-3">
+            <CheckCircle className="text-emerald-300 shrink-0" size={20} />
+            <div>
+              <div className="text-emerald-100 font-medium text-sm">Focus session saved</div>
+              <p className="text-emerald-100/70 text-xs">Nice work — your progress is on the dashboard.</p>
+            </div>
+          </div>
+        )}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
           <div>
             <h2 className="text-2xl sm:text-3xl font-bold text-white mb-1">Today</h2>
@@ -216,7 +281,12 @@ export default function Dashboard() {
             </div>
             <div className="space-y-2">
               {today.plan.map((t) => (
-                <TodayPlanCard key={t.id} task={t} onStart={handleStartSession} />
+                <TodayPlanCard
+                  key={t.id}
+                  task={t}
+                  onStart={handleStartSession}
+                  onQuickComplete={handleQuickComplete}
+                />
               ))}
             </div>
           </div>
@@ -228,6 +298,7 @@ export default function Dashboard() {
           <KanbanBoard
             tasks={tasks}
             onTaskComplete={handleTaskComplete}
+            onQuickComplete={handleQuickComplete}
             onStartSession={handleStartSession}
             onDeleteTask={handleDeleteTask}
             onRefresh={loadDashboardData}
@@ -306,6 +377,13 @@ export default function Dashboard() {
       )}
       {showManualProjectModal && (
         <ManualProjectModal onSuccess={() => { setShowManualProjectModal(false); loadDashboardData(); }} onClose={() => setShowManualProjectModal(false)} />
+      )}
+      {showQuickCompleteModal && selectedTask && (
+        <QuickCompleteModal
+          task={selectedTask}
+          onClose={() => { setShowQuickCompleteModal(false); setSelectedTask(null); }}
+          onComplete={handleQuickCompleteDone}
+        />
       )}
       {showFeedbackModal && selectedTask && (
         <TaskFeedbackModal

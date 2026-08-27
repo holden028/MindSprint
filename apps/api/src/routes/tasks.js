@@ -9,6 +9,7 @@ const { createAutoReminders, syncTaskReminders } = require('../services/reminder
 const { normalizeEmail, assignTask } = require('../services/sharing');
 const { postTaskToProjectChannel } = require('../services/slackNotify');
 const { evaluateAchievements } = require('../services/achievements');
+const { withWorkMode, buildAiInterpretations } = require('../utils/taskWorkMode');
 
 const router = express.Router();
 
@@ -83,7 +84,7 @@ router.get('/', authenticateToken, async (req, res) => {
       LIMIT $${params.length - 1} OFFSET $${params.length}
     `, params);
 
-    res.json({ tasks: result.rows.map(withTaskAccessFlags), limit, offset });
+    res.json({ tasks: result.rows.map((row) => withWorkMode(withTaskAccessFlags(row))), limit, offset });
   } catch (error) {
     console.error('Get tasks error:', error);
     res.status(500).json({ error: 'Failed to load tasks' });
@@ -140,7 +141,15 @@ router.post('/', authenticateToken, async (req, res) => {
     `, [projectId, title, description, priority, urgency, est_minutes, title, description, recurrence_rule ? JSON.stringify(recurrence_rule) : null, !!is_recurring, nextOccurrence, due_at || null]);
 
     const task = result.rows[0];
-    res.status(201).json({ task });
+    const aiInterpretations = buildAiInterpretations(task.ai_interpretations, task);
+    if (!task.ai_interpretations) {
+      await query(
+        'UPDATE tasks SET ai_interpretations = $1 WHERE id = $2',
+        [JSON.stringify(aiInterpretations), task.id]
+      );
+      task.ai_interpretations = aiInterpretations;
+    }
+    res.status(201).json({ task: withWorkMode(task) });
 
     // Auto-create dual-channel reminders when due_at is set
     if (due_at) {
@@ -247,7 +256,7 @@ async function updateTask(req, res) {
     `, values);
 
     const task = result.rows[0];
-    res.json({ task });
+    res.json({ task: withWorkMode(task) });
 
     if (updates.due_at !== undefined) {
       syncTaskReminders(id).catch((err) =>

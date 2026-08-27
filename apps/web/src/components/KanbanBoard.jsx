@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Clock, Flag, Timer, Trash2, Eye, Repeat } from 'lucide-react';
+import { Clock, Flag, Timer, Trash2, Eye, Repeat, CheckCircle } from 'lucide-react';
 import TaskDetailModal from './TaskDetailModal';
 import api from '../services/api';
 import { getPriorityColor, COLUMN_DOT_COLORS } from '../utils/colors';
 import { deadlineBadge } from '../utils/deadlines';
+import { needsFocusSession } from '../utils/workMode';
 
-export default function KanbanBoard({ tasks, onTaskComplete, onStartSession, onDeleteTask, onRefresh }) {
+export default function KanbanBoard({ tasks, onTaskComplete, onQuickComplete, onStartSession, onDeleteTask, onRefresh }) {
   const [selectedTask, setSelectedTask] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const columns = [
@@ -27,10 +28,24 @@ export default function KanbanBoard({ tasks, onTaskComplete, onStartSession, onD
     setIsDragging(false);
     const dragged = tasks.find((t) => t.id === taskId);
     if (dragged && dragged.can_edit === false) return;
+
+    if (newStatus === 'done') {
+      if (needsFocusSession(dragged)) {
+        try {
+          await api.patch(`/tasks/${taskId}`, { status: newStatus });
+          onTaskComplete(taskId);
+        } catch (error) {
+          console.error('Failed to update task:', error);
+        }
+      } else {
+        onQuickComplete(dragged);
+      }
+      return;
+    }
+
     try {
       await api.patch(`/tasks/${taskId}`, { status: newStatus });
-      if (newStatus === 'done') onTaskComplete(taskId);
-      else onRefresh();
+      onRefresh();
     } catch (error) {
       console.error('Failed to update task:', error);
     }
@@ -42,13 +57,17 @@ export default function KanbanBoard({ tasks, onTaskComplete, onStartSession, onD
   };
 
   const handleCompleteTask = async (task) => {
-    try {
-      await api.put(`/tasks/${task.id}`, { status: 'done' });
-      onRefresh();
-    } catch (error) {
-      console.error('Failed to complete task:', error);
-      alert('Failed to complete task');
+    if (needsFocusSession(task)) {
+      try {
+        await api.patch(`/tasks/${task.id}`, { status: 'done' });
+        onTaskComplete(task.id);
+      } catch (error) {
+        console.error('Failed to complete task:', error);
+        alert('Failed to complete task');
+      }
+      return;
     }
+    onQuickComplete(task);
   };
 
   const borderFor = (task) => {
@@ -137,10 +156,20 @@ export default function KanbanBoard({ tasks, onTaskComplete, onStartSession, onD
                           >
                             <Eye size={16} />
                           </button>
+                          {(task.status === 'todo' || task.status === 'doing') && task.can_edit !== false && !needsFocusSession(task) && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); onQuickComplete(task); }}
+                              className="p-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 rounded"
+                              title="Mark done"
+                            >
+                              <CheckCircle size={16} />
+                            </button>
+                          )}
                           {(task.status === 'todo' || task.status === 'doing') && task.can_edit !== false && (
                             <button
                               onClick={(e) => { e.stopPropagation(); onStartSession(task.id, task.title); }}
                               className="p-1.5 bg-green-500/20 hover:bg-green-500/30 text-green-200 rounded"
+                              title={needsFocusSession(task) ? 'Start focus session' : 'Optional timer'}
                             >
                               <Timer size={16} />
                             </button>

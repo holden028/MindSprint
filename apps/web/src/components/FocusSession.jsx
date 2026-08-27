@@ -191,7 +191,7 @@ export default function FocusSession() {
       setSessionId(null);
       setSelectedTask(null);
       setStartTime(null);
-      navigate('/progress');
+      navigate('/dashboard?sessionComplete=1');
     } catch (error) {
       console.error('Failed to end session:', error);
       alert(`Failed to save session: ${error.response?.data?.error || error.message}`);

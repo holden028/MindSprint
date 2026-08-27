@@ -10,6 +10,7 @@ import AttachmentsPanel from './AttachmentsPanel';
 import api from '../services/api';
 import { getUrgencyColor } from '../utils/colors';
 import { formatDue, toDatetimeLocal } from '../utils/deadlines';
+import { needsFocusSession } from '../utils/workMode';
 
 const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 
@@ -41,6 +42,7 @@ export default function TaskDetailModal({ task: initialTask, onClose, onStartSes
   const canEdit = task.can_edit ?? true;
   const canDelete = task.can_delete ?? !task.is_shared;
   const canShare = task.is_owner ?? !task.is_shared;
+  const focusTask = needsFocusSession(task);
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -396,15 +398,30 @@ export default function TaskDetailModal({ task: initialTask, onClose, onStartSes
 
       <div className="flex flex-col sm:flex-row gap-3">
         {(task.status === 'todo' || task.status === 'doing') && canEdit && (
-          <button
-            onClick={() => { onStartSession(task); onClose(); }}
-            className="flex-1 flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-green-500 to-blue-500 text-white rounded-lg font-semibold"
-          >
-            <Clock size={18} />
-            Start Focus
-          </button>
+          <>
+            {!focusTask && (
+              <button
+                onClick={() => { onCompleteTask(task); onClose(); }}
+                className="flex-1 flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-emerald-500 to-green-500 text-white rounded-lg font-semibold"
+              >
+                <CheckCircle size={18} />
+                Mark done
+              </button>
+            )}
+            <button
+              onClick={() => { onStartSession(task); onClose(); }}
+              className={`flex-1 flex items-center justify-center gap-2 py-3 text-white rounded-lg font-semibold ${
+                focusTask
+                  ? 'bg-gradient-to-r from-green-500 to-blue-500'
+                  : 'bg-white/10 border border-white/20 hover:bg-white/15'
+              }`}
+            >
+              <Clock size={18} />
+              {focusTask ? 'Start Focus' : 'Optional timer'}
+            </button>
+          </>
         )}
-        {task.status === 'doing' && canEdit && (
+        {task.status === 'doing' && canEdit && focusTask && (
           <button
             onClick={() => { onCompleteTask(task); onClose(); }}
             className="flex-1 flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-lg font-semibold"

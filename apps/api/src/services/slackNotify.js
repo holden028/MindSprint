@@ -56,17 +56,42 @@ async function postTaskToProjectChannel({ projectId, ownerUserId, text, taskId, 
     const prefix = event ? `*${event}*` : '*Update*';
     const mrkdwn = `${prefix} — ${text}\n_Project: ${project.title}_`;
 
-    // Done updates: no Done/Doing/Snooze buttons (Open only). Other events keep full actions.
     const isTerminal = event === 'Done';
-    const body = {
-      channel: project.slack_channel_id,
-      text: mrkdwn.replace(/\*/g, ''),
-      blocks: buildTaskActionBlocks({
+    let blocks;
+
+    if (taskId && !isTerminal) {
+      const taskRow = await query(
+        `SELECT t.*, p.title AS project_title FROM tasks t
+         JOIN projects p ON t.project_id = p.id WHERE t.id = $1`,
+        [taskId]
+      );
+      if (taskRow.rows[0]) {
+        const { withWorkMode } = require('../utils/taskWorkMode');
+        const { buildHomeTaskBlocks } = require('../utils/slackBlocks');
+        const task = withWorkMode(taskRow.rows[0]);
+        blocks = [
+          {
+            type: 'section',
+            text: { type: 'mrkdwn', text: mrkdwn }
+          },
+          ...buildHomeTaskBlocks({ task, openUrl, uniqueIds: false })
+        ];
+      }
+    }
+
+    if (!blocks) {
+      blocks = buildTaskActionBlocks({
         text: mrkdwn,
         taskId: taskId || null,
         openUrl,
         includeActions: !isTerminal
-      })
+      });
+    }
+
+    const body = {
+      channel: project.slack_channel_id,
+      text: mrkdwn.replace(/\*/g, ''),
+      blocks
     };
 
     return slackApi(owner.slack_bot_token, 'chat.postMessage', body);

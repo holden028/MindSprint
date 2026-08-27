@@ -2,6 +2,7 @@ const { query } = require('../config/database');
 const { createAutoReminders } = require('./reminders');
 const { formatNowInTimezone } = require('../utils/timezone');
 const { postTaskToProjectChannel } = require('./slackNotify');
+const { buildAiInterpretations, withWorkMode } = require('../utils/taskWorkMode');
 
 async function getFullUserContext(userId, projectId = null) {
   const taskParams = projectId ? [userId, projectId] : [userId];
@@ -188,7 +189,9 @@ ${historyContext ? `CONVERSATION HISTORY:\n${historyContext}\n` : ''}
 You can perform ACTIONS by including a JSON block in your response wrapped in <action>...</action> tags. Available actions:
 
 1. Create a task:
-<action>{"type":"create_task","title":"...","description":"...","est_minutes":30,"priority":3,"urgency":3,"due_at":"ISO date or null","project_title":"existing project name or null","attachment_ids":["uuid"]}</action>
+<action>{"type":"create_task","title":"...","description":"...","est_minutes":30,"priority":3,"urgency":3,"due_at":"ISO date or null","project_title":"existing project name or null","attachment_ids":["uuid"],"work_mode":"quick|focus"}</action>
+- Set work_mode to "focus" for multi-step or long tasks that need a timed focus session.
+- Set work_mode to "quick" for simple one-step tasks the user can mark done with yes/no (under ~15 min, single action).
 
 2. Update a task:
 <action>{"type":"update_task","task_title":"exact existing task title","updates":{"status":"done","priority":4,"due_at":"ISO date"}}</action>
@@ -263,14 +266,15 @@ RULES:
         }
 
         const taskResult = await query(`
-          INSERT INTO tasks (project_id, title, description, priority, urgency, est_minutes, due_at, original_title, original_description)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *
+          INSERT INTO tasks (project_id, title, description, priority, urgency, est_minutes, due_at, original_title, original_description, ai_interpretations)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *
         `, [
           resolvedProjectId, action.title, action.description || '', action.priority || 3, action.urgency || 3,
-          action.est_minutes || 30, action.due_at || null, action.title, action.description || ''
+          action.est_minutes || 30, action.due_at || null, action.title, action.description || '',
+          JSON.stringify(buildAiInterpretations(null, action, 'Classified when created in chat'))
         ]);
 
-        const task = taskResult.rows[0];
+        const task = withWorkMode(taskResult.rows[0]);
 
         if (Array.isArray(action.attachment_ids) && action.attachment_ids.length > 0) {
           await query(

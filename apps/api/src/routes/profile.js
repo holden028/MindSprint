@@ -120,9 +120,24 @@ router.get('/stats', authenticateToken, async (req, res) => {
       `, [user_id])
     ]);
 
+    const sessions = sessionStats.rows[0];
+    const tasks = taskStats.rows[0];
+
     res.json({
-      sessions: sessionStats.rows[0],
-      tasks: taskStats.rows[0]
+      sessions: {
+        ...sessions,
+        total_sessions: Number(sessions.total_sessions) || 0,
+        completed_sessions: Number(sessions.completed_sessions) || 0,
+        avg_rating: sessions.avg_rating != null ? Number(sessions.avg_rating) : null,
+        total_minutes: Number(sessions.total_minutes) || 0,
+      },
+      tasks: {
+        ...tasks,
+        total_tasks: Number(tasks.total_tasks) || 0,
+        completed_tasks: Number(tasks.completed_tasks) || 0,
+        avg_actual_minutes: tasks.avg_actual_minutes != null ? Number(tasks.avg_actual_minutes) : null,
+        avg_est_minutes: tasks.avg_est_minutes != null ? Number(tasks.avg_est_minutes) : null,
+      },
     });
   } catch (error) {
     console.error('Get stats error:', error);
