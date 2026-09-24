@@ -7,13 +7,44 @@ import SessionCompletionModal from './SessionCompletionModal';
 import TimerDisplay from './TimerDisplay';
 import LoadingSpinner from './LoadingSpinner';
 import { getEnvIcon } from '../utils/iconMap';
-import { Music, Moon, Volume2, Smartphone, ChevronDown, ChevronRight, Zap, Clock, Target, Plus, Brain } from 'lucide-react';
+import { suggestsFocusHelp } from '../utils/workMode';
+import {
+  Music, Moon, Volume2, Smartphone, ChevronDown, ChevronRight,
+  Zap, Clock, Target, Plus, Brain, CheckCircle
+} from 'lucide-react';
+
+const MODE_PRESETS = [
+  {
+    id: 'free',
+    title: 'Just work',
+    subtitle: 'No timer pressure',
+    defaultDuration: 25,
+    activeClass: 'bg-emerald-500/30 border-emerald-400/50 text-white',
+  },
+  {
+    id: 'adhd',
+    title: 'Sprint',
+    subtitle: '15 min burst',
+    defaultDuration: 15,
+    activeClass: 'bg-blue-500/30 border-blue-400/50 text-white',
+  },
+  {
+    id: 'pomodoro',
+    title: 'Pomodoro',
+    subtitle: '25 min optional',
+    defaultDuration: 25,
+    activeClass: 'bg-violet-500/30 border-violet-400/50 text-white',
+  },
+];
 
 export default function FocusSession() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  const [mode, setMode] = useState('pomodoro');
+  const [mode, setMode] = useState(() => {
+    const fromUrl = searchParams.get('mode');
+    return ['free', 'adhd', 'pomodoro'].includes(fromUrl) ? fromUrl : 'free';
+  });
   const [duration, setDuration] = useState(25);
   const [isRunning, setIsRunning] = useState(false);
   const [sessionId, setSessionId] = useState(null);
@@ -40,10 +71,10 @@ export default function FocusSession() {
   const [learningReasons, setLearningReasons] = useState([]);
 
   useEffect(() => {
-    if (selectedTask?.est_minutes && !isRunning) {
+    if (selectedTask?.est_minutes && !isRunning && mode !== 'free') {
       setDuration(selectedTask.est_minutes);
     }
-  }, [selectedTask, isRunning]);
+  }, [selectedTask, isRunning, mode]);
 
   useEffect(() => {
     const load = async () => {
@@ -78,6 +109,10 @@ export default function FocusSession() {
           const task = incompleteTasks.find((t) => String(t.id) === String(taskId));
           if (task) {
             setSelectedTask(task);
+            if (suggestsFocusHelp(task) && !searchParams.get('mode')) {
+              // Soft default: longer tasks still open in free work, not forced Pomodoro
+              setMode('free');
+            }
           } else {
             const title = searchParams.get('taskTitle');
             setSelectedTask({ id: taskId, title: title ? decodeURIComponent(title) : 'Selected task' });
@@ -128,12 +163,18 @@ export default function FocusSession() {
     }));
   };
 
+  const selectMode = (preset) => {
+    if (isRunning) return;
+    setMode(preset.id);
+    setDuration(preset.defaultDuration);
+  };
+
   const handleStart = async () => {
     try {
       const response = await api.post('/sessions/start', {
         task_id: selectedTask?.id || null,
         mode,
-        duration_minutes: duration,
+        duration_minutes: mode === 'free' ? (selectedTask?.est_minutes || duration) : duration,
         environment
       });
       setSessionId(response.data.session.id);
@@ -151,6 +192,17 @@ export default function FocusSession() {
     setIsRunning(false);
     setShowCompletionModal(true);
   }, []);
+
+  const handleQuickMarkDone = async () => {
+    if (!selectedTask?.id) return;
+    try {
+      await api.patch(`/tasks/${selectedTask.id}`, { status: 'done' });
+      navigate('/dashboard?sessionComplete=1');
+    } catch (error) {
+      console.error('Failed to mark done:', error);
+      alert('Failed to mark task done');
+    }
+  };
 
   const handleSessionCompletion = async (sessionSummary) => {
     if (!sessionId) {
@@ -204,39 +256,58 @@ export default function FocusSession() {
   }
 
   return (
-    <main className="max-w-4xl mx-auto px-4 py-12">
+    <main className="max-w-4xl mx-auto px-4 py-8 sm:py-12">
       <div className="mb-8">
-        <h2 className="text-2xl font-bold text-white mb-4">Focus Mode</h2>
-        <div className="flex gap-4">
-          <button
-            onClick={() => { setMode('pomodoro'); setDuration(25); }}
-            className={`flex-1 p-4 rounded-lg backdrop-blur-sm border transition-all ${
-              mode === 'pomodoro'
-                ? 'bg-purple-500/30 border-purple-400/50 text-white'
-                : 'bg-white/10 border-white/20 text-white/70 hover:bg-white/15'
-            }`}
-          >
-            <div className="font-semibold mb-1">Pomodoro</div>
-            <div className="text-sm opacity-80">25 min focus</div>
-          </button>
-          <button
-            onClick={() => { setMode('adhd'); setDuration(15); }}
-            className={`flex-1 p-4 rounded-lg backdrop-blur-sm border transition-all ${
-              mode === 'adhd'
-                ? 'bg-blue-500/30 border-blue-400/50 text-white'
-                : 'bg-white/10 border-white/20 text-white/70 hover:bg-white/15'
-            }`}
-          >
-            <div className="font-semibold mb-1">ADHD Sprint</div>
-            <div className="text-sm opacity-80">15 min burst</div>
-          </button>
+        <h2 className="text-2xl font-bold text-white mb-2">Do the work</h2>
+        <p className="text-white/55 text-sm mb-4">
+          Pick a task and start. A timer is optional — Pomodoro is just one tool, not the point.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {MODE_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              disabled={isRunning}
+              onClick={() => selectMode(preset)}
+              className={`p-4 rounded-lg backdrop-blur-sm border transition-all text-left disabled:opacity-60 ${
+                mode === preset.id
+                  ? preset.activeClass
+                  : 'bg-white/10 border-white/20 text-white/70 hover:bg-white/15'
+              }`}
+            >
+              <div className="font-semibold mb-1">{preset.title}</div>
+              <div className="text-sm opacity-80">{preset.subtitle}</div>
+            </button>
+          ))}
         </div>
       </div>
+
+      {selectedTask && !isRunning && (
+        <div className="mb-6 flex flex-wrap items-center gap-3 rounded-xl border border-white/15 bg-white/5 px-4 py-3">
+          <div className="flex-1 min-w-0">
+            <div className="text-white font-medium text-sm truncate">{selectedTask.title}</div>
+            <div className="text-white/45 text-xs mt-0.5">
+              {suggestsFocusHelp(selectedTask)
+                ? 'Might feel better with a protected block — still fine to just knock it out.'
+                : 'Looks like a quick win — mark done anytime.'}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleQuickMarkDone}
+            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 rounded-lg text-sm font-medium shrink-0"
+          >
+            <CheckCircle size={16} />
+            Mark done
+          </button>
+        </div>
+      )}
 
       <TimerDisplay
         duration={duration}
         isRunning={isRunning}
         selectedTask={selectedTask}
+        mode={mode}
         onStart={handleStart}
         onPause={handlePause}
         onReset={handleReset}
@@ -285,7 +356,7 @@ export default function FocusSession() {
             { key: 'music', icon: Music, label: 'Music' },
             { key: 'darkRoom', icon: Moon, label: 'Dark Room' },
             { key: 'silence', icon: Volume2, label: 'Silence' },
-            { key: 'phoneOff', icon: Smartphone, label: 'Phone Off' }
+            { key: 'phoneOff', icon: Smartphone, label: 'Phone lock' }
           ].map(({ key, icon: Icon, label }) => (
             <button
               key={key}
@@ -301,6 +372,9 @@ export default function FocusSession() {
             </button>
           ))}
         </div>
+        <p className="text-white/35 text-xs mt-3">
+          Phone lock today is a commitment cue. True iPhone lock (Spotify + MindSprint only until the task is done) is on the roadmap.
+        </p>
 
         {customEnvironments.length > 0 && (
           <div className="mt-4">
@@ -316,7 +390,7 @@ export default function FocusSession() {
                     onClick={() => setEnvironment({ ...environment, [envKey]: !environment[envKey] })}
                     className={`p-3 rounded-lg backdrop-blur-sm border transition-all duration-200 ${
                       environment[envKey]
-                        ? 'bg-purple-500/20 border-purple-400/30 text-purple-200'
+                        ? 'bg-violet-500/20 border-violet-400/30 text-violet-200'
                         : 'bg-white/10 border-white/20 text-white/80 hover:bg-white/20'
                     }`}
                   >
@@ -376,12 +450,15 @@ export default function FocusSession() {
         </h3>
         {tasks.length === 0 ? (
           <div className="backdrop-blur-sm bg-white/10 border border-white/20 rounded-lg p-8 text-center">
-            <p className="text-white/60 mb-4">No tasks available</p>
+            <p className="text-white/70 mb-2 font-medium">Nothing in MindSprint yet</p>
+            <p className="text-white/45 text-sm mb-4">
+              Capture whatever is rattling around — even half-formed. We&apos;ll help you break it down.
+            </p>
             <button
-              onClick={() => navigate('/dashboard')}
-              className="px-6 py-2 bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 rounded-lg transition-all"
+              onClick={() => navigate('/dashboard?capture=1')}
+              className="px-6 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 rounded-lg transition-all"
             >
-              Add Tasks
+              Add something
             </button>
           </div>
         ) : (

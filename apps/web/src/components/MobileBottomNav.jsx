@@ -4,7 +4,7 @@ import { Home, Target, BarChart3, FolderKanban, Settings } from 'lucide-react';
 
 const ITEMS = [
   { path: '/dashboard', icon: Home, label: 'Today' },
-  { path: '/focus', icon: Target, label: 'Focus' },
+  { path: '/focus', icon: Target, label: 'Do' },
   { path: '/progress', icon: BarChart3, label: 'Progress', match: ['/progress', '/reflections', '/insights', '/achievements'] },
   { path: '/projects', icon: FolderKanban, label: 'Projects' },
   { path: '/settings', icon: Settings, label: 'Settings' },

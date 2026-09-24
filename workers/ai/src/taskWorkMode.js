@@ -30,7 +30,7 @@ function inferWorkMode(task) {
     return { work_mode: 'quick', work_mode_reason: 'Short, single-step task' };
   }
   if (focusScore >= 2) {
-    return { work_mode: 'focus', work_mode_reason: 'Needs sustained focus or multiple steps' };
+    return { work_mode: 'focus', work_mode_reason: 'May benefit from protected work time' };
   }
   return { work_mode: 'quick', work_mode_reason: 'Quick action item' };
 }

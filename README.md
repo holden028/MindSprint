@@ -5,11 +5,15 @@ A Dockerized web platform that helps users with ADHD or executive dysfunction st
 ## Features
 
 - **AI-Powered Task Breakdown**: Upload text, emails, or screenshots to automatically generate microtasks
-- **Adaptive Focus Sessions**: Pomodoro timer with ADHD mode (8-15 min bursts)
+- **Do-first work mode**: Start any task with or without a timer — Pomodoro is optional
+- **Just work / Sprint / Pomodoro**: Untimed work by default, short bursts, or classic countdown when you want them
 - **Personalized Learning**: AI learns your optimal focus conditions over time
+- **Capture & do nudges**: Encourages dumping tasks into MindSprint and starting the next one
 - **Environment Tracking**: Track what conditions help you focus best
 - **Progress Dashboard**: Visual progress tracking with streaks and achievements
 - **Reflection System**: Post-session surveys to improve recommendations
+
+See **[PRODUCT.md](./PRODUCT.md)** for product direction, including the iPhone Focus Lock roadmap.
 
 ## Tech Stack
 

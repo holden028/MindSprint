@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
-    mode VARCHAR(20) DEFAULT 'pomodoro' CHECK (mode IN ('pomodoro', 'adhd')),
+    mode VARCHAR(20) DEFAULT 'pomodoro' CHECK (mode IN ('pomodoro', 'adhd', 'free')),
     duration_minutes INT DEFAULT 25,
     actual_duration_minutes INT,
     environment JSONB,
