@@ -48,7 +48,7 @@ export default function Header() {
 
   const navItems = [
     { path: '/dashboard', icon: Home, label: 'Dashboard' },
-    { path: '/focus', icon: Target, label: 'Focus' },
+    { path: '/focus', icon: Target, label: 'Do' },
     { path: '/projects', icon: FolderKanban, label: 'Projects' },
     { path: '/calendar', icon: CalendarDays, label: 'Calendar' },
     { path: '/templates', icon: LayoutTemplate, label: 'Templates' },

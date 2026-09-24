@@ -5,6 +5,10 @@ const MULTI_STEP_PATTERNS = [
   /\b(research|implement|design|draft|write up|build out| refactor|debug|review and)\b/i,
 ];
 
+/**
+ * Soft classification only — a hint about how you might work, not a gate.
+ * Every task can be marked done or worked with/without a timer.
+ */
 export function inferWorkMode(task) {
   const stored = task?.ai_interpretations?.work_mode;
   if (stored === 'quick' || stored === 'focus') {
@@ -35,12 +39,41 @@ export function inferWorkMode(task) {
   }
 
   if (focusScore >= 2) {
-    return { work_mode: 'focus', work_mode_reason: 'Needs sustained focus or multiple steps' };
+    return { work_mode: 'focus', work_mode_reason: 'May benefit from protected work time' };
   }
 
   return { work_mode: 'quick', work_mode_reason: 'Quick action item' };
 }
 
+/** @deprecated Prefer suggestsFocusHelp — focus is a suggestion, not a requirement */
 export function needsFocusSession(task) {
+  return suggestsFocusHelp(task);
+}
+
+export function suggestsFocusHelp(task) {
   return inferWorkMode(task).work_mode === 'focus';
+}
+
+export function isQuickWin(task) {
+  return inferWorkMode(task).work_mode === 'quick';
+}
+
+/** Primary CTA copy: always "Do it" — timer is secondary */
+export function doActionLabel(_task) {
+  return 'Do it';
+}
+
+export function workModeBadge(task) {
+  if (suggestsFocusHelp(task)) {
+    return {
+      label: 'Focus help',
+      title: 'May benefit from protected work time — timer optional',
+      className: 'border-sky-400/30 text-sky-200/80',
+    };
+  }
+  return {
+    label: 'Quick',
+    title: 'Usually a quick mark-done',
+    className: 'border-emerald-400/30 text-emerald-200/80',
+  };
 }

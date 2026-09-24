@@ -6,8 +6,8 @@ const MULTI_STEP_PATTERNS = [
 ];
 
 /**
- * Infer whether a task needs a full focus session or a quick yes/no completion.
- * Uses stored AI classification when present, otherwise heuristics.
+ * Soft classification: hint about protected work time vs quick mark-done.
+ * Never a hard gate — timers are always optional.
  */
 function inferWorkMode(task) {
   const stored = task.ai_interpretations?.work_mode;
@@ -36,7 +36,7 @@ function inferWorkMode(task) {
   }
 
   if (focusScore >= 2) {
-    return { work_mode: 'focus', work_mode_reason: 'Needs sustained focus or multiple steps' };
+    return { work_mode: 'focus', work_mode_reason: 'May benefit from protected work time' };
   }
 
   return { work_mode: 'quick', work_mode_reason: 'Quick action item' };
@@ -72,7 +72,7 @@ function buildAiInterpretations(existing, taskLike, reason) {
     ...(existing && typeof existing === 'object' ? existing : {}),
     work_mode,
     work_mode_reason: reason || (work_mode === 'focus'
-      ? 'AI: needs focus session'
+      ? 'AI: may benefit from protected work time'
       : 'AI: quick completion'),
   };
 }

@@ -300,7 +300,9 @@ async function ensureProjectForSlackChannel({ channelId, channelName, creatorSla
 }
 
 function modeLabel(mode) {
-  return mode === 'adhd' ? 'ADHD sprint' : 'Pomodoro';
+  if (mode === 'adhd') return 'Sprint';
+  if (mode === 'free') return 'Just work';
+  return 'Pomodoro';
 }
 
 function focusEndsAt(startedAt, durationMinutes) {
@@ -424,14 +426,19 @@ async function clearFocusDndSnooze(token) {
 }
 
 function buildFocusInProgressBlocks(ctx, { focusUrl, ends, tz }) {
-  const taskLine = ctx.task_title ? `*${ctx.task_title}*` : '*Open focus*';
+  const taskLine = ctx.task_title ? `*${ctx.task_title}*` : '*Open work*';
   const projectLine = ctx.project_title ? `\n_Project: ${ctx.project_title}_` : '';
+  const isFree = ctx.mode === 'free';
+  const emoji = isFree ? '🟢' : '🍅';
+  const untilLine = isFree
+    ? 'Working until the task is done · leave them alone.'
+    : `Until ~*${formatClock(ends, tz)}* · leave them alone.`;
   const mrkdwn =
-    `🍅 *Focus in progress* — ${modeLabel(ctx.mode)} · ${ctx.duration_minutes || 25}m\n` +
+    `${emoji} *In progress* — ${modeLabel(ctx.mode)}${isFree ? '' : ` · ${ctx.duration_minutes || 25}m`}\n` +
     `${taskLine}\n` +
-    `Until ~*${formatClock(ends, tz)}* · leave them alone.${projectLine}`;
+    `${untilLine}${projectLine}`;
   return {
-    text: `Focus in progress — ${ctx.task_title || 'session'} (${ctx.duration_minutes || 25}m)`,
+    text: `In progress — ${ctx.task_title || 'session'}${isFree ? '' : ` (${ctx.duration_minutes || 25}m)`}`,
     blocks: [
       {
         type: 'section',
@@ -442,7 +449,7 @@ function buildFocusInProgressBlocks(ctx, { focusUrl, ends, tz }) {
         elements: [
           {
             type: 'button',
-            text: { type: 'plain_text', text: 'Open timer' },
+            text: { type: 'plain_text', text: isFree ? 'Open MindSprint' : 'Open timer' },
             action_id: 'open_focus',
             url: focusUrl
           }

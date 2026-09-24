@@ -4,7 +4,7 @@ import TaskDetailModal from './TaskDetailModal';
 import api from '../services/api';
 import { getPriorityColor, COLUMN_DOT_COLORS } from '../utils/colors';
 import { deadlineBadge } from '../utils/deadlines';
-import { needsFocusSession } from '../utils/workMode';
+import { suggestsFocusHelp } from '../utils/workMode';
 
 export default function KanbanBoard({ tasks, onTaskComplete, onQuickComplete, onStartSession, onDeleteTask, onRefresh }) {
   const [selectedTask, setSelectedTask] = useState(null);
@@ -30,7 +30,7 @@ export default function KanbanBoard({ tasks, onTaskComplete, onQuickComplete, on
     if (dragged && dragged.can_edit === false) return;
 
     if (newStatus === 'done') {
-      if (needsFocusSession(dragged)) {
+      if (suggestsFocusHelp(dragged)) {
         try {
           await api.patch(`/tasks/${taskId}`, { status: newStatus });
           onTaskComplete(taskId);
@@ -57,7 +57,7 @@ export default function KanbanBoard({ tasks, onTaskComplete, onQuickComplete, on
   };
 
   const handleCompleteTask = async (task) => {
-    if (needsFocusSession(task)) {
+    if (suggestsFocusHelp(task)) {
       try {
         await api.patch(`/tasks/${task.id}`, { status: 'done' });
         onTaskComplete(task.id);
@@ -156,7 +156,7 @@ export default function KanbanBoard({ tasks, onTaskComplete, onQuickComplete, on
                           >
                             <Eye size={16} />
                           </button>
-                          {(task.status === 'todo' || task.status === 'doing') && task.can_edit !== false && !needsFocusSession(task) && (
+                          {(task.status === 'todo' || task.status === 'doing') && task.can_edit !== false && (
                             <button
                               onClick={(e) => { e.stopPropagation(); onQuickComplete(task); }}
                               className="p-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 rounded"
@@ -169,7 +169,7 @@ export default function KanbanBoard({ tasks, onTaskComplete, onQuickComplete, on
                             <button
                               onClick={(e) => { e.stopPropagation(); onStartSession(task.id, task.title); }}
                               className="p-1.5 bg-green-500/20 hover:bg-green-500/30 text-green-200 rounded"
-                              title={needsFocusSession(task) ? 'Start focus session' : 'Optional timer'}
+                              title={suggestsFocusHelp(task) ? 'Do it (timer optional)' : 'Do it / optional timer'}
                             >
                               <Timer size={16} />
                             </button>

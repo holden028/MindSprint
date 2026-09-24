@@ -412,7 +412,7 @@ function TaskCard({ task, onDelete, onStartSession, getPriorityColor, completed,
             <button
               onClick={() => onStartSession(task.id, task.title)}
               className="p-2 bg-green-500/20 hover:bg-green-500/30 text-green-200 rounded transition-all opacity-0 group-hover:opacity-100"
-              title="Start Focus Session"
+              title="Do it (timer optional)"
             >
               <Target size={18} />
             </button>
